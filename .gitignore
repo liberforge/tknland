@@ -1,0 +1,28 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Dependencies / build
+node_modules
+dist
+dist-ssr
+*.local
+.dev.vars
+
+# Editor
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+
+# TypeScript
+*.tsbuildinfo
+
+# PWA generated
+dev-dist
+
+private/*
