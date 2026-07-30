@@ -1,21 +1,33 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { HomeScreen } from "./screens/HomeScreen";
 import { MenuSheet } from "./components/MenuSheet";
+import { MettalConnectSheet } from "./components/MettalConnectSheet";
 import { SetupScreen } from "./screens/SetupScreen";
 import { UnsupportedScreen } from "./screens/UnsupportedScreen";
 import { isPrfSupported, getWebAuthnHostHint } from "./lib/webauthn/prf";
 import { getActiveDeviceVault } from "./lib/vault/db";
 import { createInitialDeviceVault, verifyVaultUnlock } from "./lib/vault/ceremony";
 import type { DeviceVaultRecord } from "./lib/vault/types";
+import {
+  disconnectMettal,
+  storeMettalCredentials,
+  type MettalCredentials,
+} from "./lib/mettal/credentials";
 
 type BootState =
   | { status: "loading" }
   | { status: "unsupported"; reason?: string }
   | { status: "setup" }
+  | { status: "design-preview" }
   | { status: "ready"; vault: DeviceVaultRecord };
+
+const isLocalDesignPreview =
+  import.meta.env.DEV &&
+  window.location.origin === "http://127.0.0.1:5173";
 
 export default function App() {
   const [menuOpen, setMenuOpen] = useState(false);
+  const [mettalOpen, setMettalOpen] = useState(false);
   const [boot, setBoot] = useState<BootState>({ status: "loading" });
   const [setupBusy, setSetupBusy] = useState(false);
   const [setupError, setSetupError] = useState<string | null>(null);
@@ -25,6 +37,11 @@ export default function App() {
     let cancelled = false;
 
     (async () => {
+      if (isLocalDesignPreview) {
+        setBoot({ status: "design-preview" });
+        return;
+      }
+
       const hostHint = getWebAuthnHostHint();
       if (hostHint) {
         if (!cancelled) {
@@ -38,7 +55,7 @@ export default function App() {
       if (!supported) {
         setBoot({
           status: "unsupported",
-          reason: "Platform authenticator / PRF unavailable.",
+          reason: "El autenticador de la plataforma o PRF no está disponible.",
         });
         return;
       }
@@ -54,7 +71,7 @@ export default function App() {
       if (cancelled) return;
       setBoot({
         status: "unsupported",
-        reason: err instanceof Error ? err.message : "Startup failed",
+        reason: err instanceof Error ? err.message : "Error al iniciar",
       });
     });
 
@@ -71,8 +88,8 @@ export default function App() {
       setBoot({ status: "ready", vault });
     } catch (err) {
       const message =
-        err instanceof Error ? err.message : "Could not create wallet";
-      if (/PRF|does not support/i.test(message)) {
+        err instanceof Error ? err.message : "No se pudo crear la billetera";
+      if (/PRF|does not support|no admite/i.test(message)) {
         setBoot({ status: "unsupported", reason: message });
       } else {
         setSetupError(message);
@@ -83,14 +100,52 @@ export default function App() {
   }
 
   async function handleTestUnlock() {
+    if (boot.status === "design-preview") {
+      setUnlockHint("Biometría desactivada en la vista previa local");
+      return;
+    }
     if (boot.status !== "ready") return;
-    setUnlockHint("Waiting for biometrics…");
+    setUnlockHint("Esperando la biometría…");
     try {
       const { wordCount } = await verifyVaultUnlock(boot.vault);
-      setUnlockHint(`OK — decrypted ${wordCount}-word seed, then wiped`);
+      setUnlockHint(
+        `Listo: frase de ${wordCount} palabras descifrada y luego borrada`,
+      );
     } catch (err) {
-      setUnlockHint(err instanceof Error ? err.message : "Unlock failed");
+      setUnlockHint(err instanceof Error ? err.message : "Error al desbloquear");
     }
+  }
+
+  const handleMettalCredentials = useCallback(
+    async (credentials: MettalCredentials) => {
+      if (boot.status !== "ready") {
+        throw new Error(
+          "Abre http://localhost:5173 para guardar las credenciales con biometría.",
+        );
+      }
+
+      const vault = await storeMettalCredentials(boot.vault, credentials);
+      setBoot({ status: "ready", vault });
+    },
+    [boot],
+  );
+
+  function handleDisconnectMettal() {
+    if (!import.meta.env.DEV || boot.status !== "ready") return;
+
+    void (async () => {
+      try {
+        const vault = await disconnectMettal(boot.vault);
+        setBoot({ status: "ready", vault });
+        setMenuOpen(false);
+      } catch (err) {
+        setUnlockHint(
+          err instanceof Error
+            ? err.message
+            : "No se pudo desconectar Mettal.",
+        );
+      }
+    })();
   }
 
   return (
@@ -99,10 +154,10 @@ export default function App() {
         <p className="text-2xl font-semibold tracking-tight text-ink">
           {import.meta.env.DEV ? "DEV tkn.land" : "tkn.land"}
         </p>
-        {boot.status === "ready" ? (
+        {boot.status === "ready" || boot.status === "design-preview" ? (
           <button
             type="button"
-            aria-label="Open menu"
+            aria-label="Abrir menú"
             onClick={() => setMenuOpen(true)}
             className="grid h-11 w-11 place-items-center rounded-xl border border-line bg-surface-raised text-ink"
           >
@@ -119,7 +174,7 @@ export default function App() {
 
       <main className="flex flex-1 flex-col">
         {boot.status === "loading" ? (
-          <p className="py-16 text-center text-ink-muted">Loading…</p>
+          <p className="py-16 text-center text-ink-muted">Cargando…</p>
         ) : null}
         {boot.status === "unsupported" ? (
           <UnsupportedScreen reason={boot.reason} />
@@ -131,15 +186,36 @@ export default function App() {
             onSetup={handleSetup}
           />
         ) : null}
-        {boot.status === "ready" ? <HomeScreen /> : null}
+        {boot.status === "ready" || boot.status === "design-preview" ? (
+          <HomeScreen onAdd={() => setMettalOpen(true)} />
+        ) : null}
       </main>
 
-      {boot.status === "ready" ? (
+      {boot.status === "ready" || boot.status === "design-preview" ? (
         <MenuSheet
           open={menuOpen}
           onClose={() => setMenuOpen(false)}
           onTestUnlock={handleTestUnlock}
+          onDisconnectMettal={
+            import.meta.env.DEV &&
+            boot.status === "ready" &&
+            Boolean(boot.vault.mettalCredentials)
+              ? handleDisconnectMettal
+              : undefined
+          }
           unlockHint={unlockHint}
+        />
+      ) : null}
+
+      {boot.status === "ready" || boot.status === "design-preview" ? (
+        <MettalConnectSheet
+          open={mettalOpen}
+          connected={
+            boot.status === "ready" && Boolean(boot.vault.mettalCredentials)
+          }
+          secureStorageAvailable={boot.status === "ready"}
+          onClose={() => setMettalOpen(false)}
+          onCredentials={handleMettalCredentials}
         />
       ) : null}
     </div>

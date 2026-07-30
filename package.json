@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@scure/bip39": "^2.2.0",
+    "qr-scanner": "^1.4.2",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "workbox-window": "^7.3.0"

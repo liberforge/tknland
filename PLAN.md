@@ -1,5 +1,10 @@
 # tkn.land — Implementation Plan
 
+> **IMPORTANT — Keep it simple first.** Default screens show only the minimum
+> information needed for the user's next action. Hide security details,
+> implementation terms, and explanations unless the user explicitly asks for
+> them or opens an advanced view.
+
 ## Product principle — simple by default
 
 The default experience is for a crypto-inexperienced normies: no setup

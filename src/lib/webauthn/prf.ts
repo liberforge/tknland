@@ -11,7 +11,7 @@ function getRpId(): string {
   // Use http://localhost:5173 for local WebAuthn, not 127.0.0.1.
   if (host === "127.0.0.1" || host === "[::1]" || host === "::1") {
     throw new Error(
-      "Open http://localhost:5173 (not 127.0.0.1) — passkeys need a real hostname.",
+      "Abre http://localhost:5173 (no 127.0.0.1): las claves de acceso necesitan un nombre de host.",
     );
   }
   return host;
@@ -20,7 +20,7 @@ function getRpId(): string {
 export function getWebAuthnHostHint(): string | null {
   const host = window.location.hostname;
   if (host === "127.0.0.1" || host === "[::1]" || host === "::1") {
-    return "Open http://localhost:5173 instead of 127.0.0.1 — biometrics need a hostname.";
+    return "Abre http://localhost:5173 en lugar de 127.0.0.1: la biometría necesita un nombre de host.";
   }
   return null;
 }
@@ -28,13 +28,13 @@ export function getWebAuthnHostHint(): string | null {
 function webAuthnCreateHint(err: unknown): string {
   const name = err instanceof DOMException ? err.name : "";
   if (name === "NotAllowedError" || name === "AbortError") {
-    return "Passkey was cancelled or blocked. Open this URL in Chrome (not an in-app browser), unlock the phone with biometrics/PIN, and use Google Password Manager as the passkey provider.";
+    return "La clave de acceso se canceló o bloqueó. Abre esta URL en Chrome (no en un navegador integrado), desbloquea el teléfono con biometría o PIN y usa el Administrador de contraseñas de Google.";
   }
   if (name === "NotSupportedError" || name === "SecurityError") {
-    return "This browser cannot create a device passkey here. Use Chrome on Android 14+ (or Safari on iOS 18+) over HTTPS.";
+    return "Este navegador no puede crear aquí una clave de acceso. Usa Chrome en Android 14+ o Safari en iOS 18+ mediante HTTPS.";
   }
   if (err instanceof Error && err.message) return err.message;
-  return "Passkey creation failed";
+  return "No se pudo crear la clave de acceso";
 }
 
 export async function isPrfSupported(): Promise<boolean> {
@@ -111,14 +111,14 @@ export async function createPasskeyWithPrf(
   }
 
   if (!credential) {
-    throw new Error("Passkey creation was cancelled");
+    throw new Error("Se canceló la creación de la clave de acceso");
   }
 
   const ext = credential.getClientExtensionResults() as {
     prf?: PrfExtensionOutputs;
   };
   if (ext.prf?.enabled === false) {
-    throw new Error("This device does not support passkey PRF");
+    throw new Error("Este dispositivo no admite claves de acceso con PRF");
   }
 
   const credentialId = new Uint8Array(credential.rawId);
@@ -167,7 +167,7 @@ export async function assertPasskeyWithPrf(opts: {
   })) as PublicKeyCredential | null;
 
   if (!assertion) {
-    throw new Error("Biometric unlock was cancelled");
+    throw new Error("Se canceló el desbloqueo biométrico");
   }
 
   const ext = assertion.getClientExtensionResults() as {
@@ -175,7 +175,7 @@ export async function assertPasskeyWithPrf(opts: {
   };
   const prfFirst = ext.prf?.results?.first;
   if (!prfFirst) {
-    throw new Error("PRF result missing from passkey assertion");
+    throw new Error("Falta el resultado PRF de la clave de acceso");
   }
 
   return new Uint8Array(prfFirst);

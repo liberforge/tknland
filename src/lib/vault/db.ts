@@ -9,7 +9,8 @@ const META_KEY = "app";
 function openDb(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const req = indexedDB.open(DB_NAME, DB_VERSION);
-    req.onerror = () => reject(req.error ?? new Error("IndexedDB open failed"));
+    req.onerror = () =>
+      reject(req.error ?? new Error("No se pudo abrir IndexedDB"));
     req.onsuccess = () => resolve(req.result);
     req.onupgradeneeded = () => {
       const db = req.result;
@@ -26,7 +27,8 @@ function openDb(): Promise<IDBDatabase> {
 function idbReq<T>(req: IDBRequest<T>): Promise<T> {
   return new Promise((resolve, reject) => {
     req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error ?? new Error("IndexedDB request failed"));
+    req.onerror = () =>
+      reject(req.error ?? new Error("Falló la solicitud de IndexedDB"));
   });
 }
 

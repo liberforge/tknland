@@ -25,9 +25,9 @@ export default defineConfig(({ mode }) => {
         manifest: {
           name: appName,
           short_name: isDev ? "DEV tkn" : "tkn.land",
-          description: "Simple biometric wallet",
-          theme_color: "#0f1a14",
-          background_color: "#0f1a14",
+          description: "Billetera biométrica sencilla",
+          theme_color: "#111318",
+          background_color: "#111318",
           display: "standalone",
           orientation: "portrait",
           start_url: "/",

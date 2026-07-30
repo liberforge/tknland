@@ -2,14 +2,14 @@
 
 @theme {
   --font-sans: "Avenir Next", "Segoe UI", "Helvetica Neue", sans-serif;
-  --color-ink: #e8f0ea;
-  --color-ink-muted: #9db0a4;
-  --color-surface: #0f1a14;
-  --color-surface-raised: #17251c;
-  --color-accent: #3d8f5f;
-  --color-accent-strong: #4eaa72;
+  --color-ink: #f2f5fa;
+  --color-ink-muted: #a5adba;
+  --color-surface: #111318;
+  --color-surface-raised: #1b1f27;
+  --color-accent: #4d8dff;
+  --color-accent-strong: #70a6ff;
   --color-danger: #c45c4a;
-  --color-line: #2a3d31;
+  --color-line: #303744;
 }
 
 html,
@@ -23,8 +23,8 @@ body {
   font-family: var(--font-sans);
   color: var(--color-ink);
   background:
-    radial-gradient(120% 80% at 50% -10%, #1c3326 0%, transparent 55%),
-    linear-gradient(180deg, #0f1a14 0%, #0a120e 100%);
+    radial-gradient(120% 80% at 50% -10%, #1b2941 0%, transparent 55%),
+    linear-gradient(180deg, #111318 0%, #0c0e12 100%);
   background-attachment: fixed;
   -webkit-font-smoothing: antialiased;
   -webkit-tap-highlight-color: transparent;

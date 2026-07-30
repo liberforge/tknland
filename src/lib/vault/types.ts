@@ -3,6 +3,11 @@ export type VaultAccount = {
   address: string;
 };
 
+export type EncryptedMettalCredentials = {
+  iv: string;
+  ciphertext: string;
+};
+
 export type DeviceVaultRecord = {
   id: string;
   type: "device";
@@ -14,6 +19,7 @@ export type DeviceVaultRecord = {
   accounts: VaultAccount[];
   backupCompleted: boolean;
   balanceAtLeast500Since: number | null;
+  mettalCredentials?: EncryptedMettalCredentials;
 };
 
 export type ColdVaultRecord = {

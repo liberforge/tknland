@@ -80,36 +80,55 @@ export async function createInitialDeviceVault(): Promise<DeviceVaultRecord> {
 }
 
 /**
- * Per-action ceremony: biometric → PRF → decrypt seed → use → wipe.
+ * Per-action ceremony: biometric → PRF → derive the vault key → use.
  */
-export async function withDeviceVaultSeed<T>(
+export async function withDeviceVaultKey<T>(
   vault: DeviceVaultRecord,
-  useSeed: (mnemonic: string) => Promise<T> | T,
+  useKey: (key: CryptoKey) => Promise<T> | T,
 ): Promise<T> {
   const credentialId = parseCredentialId(vault.credentialId);
   const prfSalt = base64UrlToBytes(vault.prfSalt);
   let prfOutput: Uint8Array | null = null;
-  let mnemonic: string | null = null;
 
   try {
     prfOutput = await assertPasskeyWithPrf({ credentialId, prfSalt });
     const aesKey = await aesKeyFromPrf(prfOutput);
     wipePrfOutput(prfOutput);
     prfOutput = null;
-
-    mnemonic = await decryptUtf8(
-      {
-        iv: base64UrlToBytes(vault.iv),
-        ciphertext: base64UrlToBytes(vault.ciphertext),
-      },
-      aesKey,
-    );
-
-    return await useSeed(mnemonic);
+    return await useKey(aesKey);
   } finally {
     wipeBytes(credentialId);
     wipeBytes(prfSalt);
     if (prfOutput) wipePrfOutput(prfOutput);
+  }
+}
+
+/**
+ * Per-action ceremony: biometric → PRF → decrypt seed → use → wipe.
+ */
+export async function withDeviceVaultSeed<T>(
+  vault: DeviceVaultRecord,
+  useSeed: (mnemonic: string) => Promise<T> | T,
+): Promise<T> {
+  let mnemonic: string | null = null;
+  const iv = base64UrlToBytes(vault.iv);
+  const ciphertext = base64UrlToBytes(vault.ciphertext);
+
+  try {
+    return await withDeviceVaultKey(vault, async (aesKey) => {
+      mnemonic = await decryptUtf8(
+        {
+          iv,
+          ciphertext,
+        },
+        aesKey,
+      );
+
+      return await useSeed(mnemonic);
+    });
+  } finally {
+    wipeBytes(iv);
+    wipeBytes(ciphertext);
     mnemonic = null;
   }
 }
