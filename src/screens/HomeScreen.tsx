@@ -9,7 +9,7 @@ export function HomeScreen({ balanceLabel = "$0.00" }: HomeScreenProps) {
         <p className="text-sm font-medium tracking-wide text-ink-muted uppercase">
           Your balance
         </p>
-        <p className="font-display mt-3 text-5xl tracking-tight text-ink tabular-nums">
+        <p className="mt-3 text-5xl font-semibold tracking-tight text-ink tabular-nums">
           {balanceLabel}
         </p>
         <p className="mt-3 text-sm text-ink-muted">On Base</p>
@@ -41,7 +41,7 @@ function ActionButton({
           : "flex min-h-28 flex-col items-start justify-between rounded-2xl border border-line bg-surface-raised px-5 py-4 text-left text-ink transition active:scale-[0.98]"
       }
     >
-      <span className="font-display text-2xl">{label}</span>
+      <span className="text-2xl font-semibold">{label}</span>
       <span className={primary ? "text-sm text-ink/80" : "text-sm text-ink-muted"}>
         {hint}
       </span>

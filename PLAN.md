@@ -154,22 +154,22 @@ vault** seeds for each sensitive action only.
 ### Milestone 1 — Installable shell
 - [x] Scaffold Vite + React + TS + Tailwind + `vite-plugin-pwa`.
 - [x] Manifest, icons, mobile viewport (`viewport-fit=cover`), service worker.
-- [ ] GitHub repo + Vercel project + `tkn.land` domain + HTTPS.
-- [ ] Verify install-to-homescreen on Android and iOS.
+- [x] GitHub repo + Vercel project + `tkn.land` domain + HTTPS.
+- [x] Verify install-to-homescreen on Android and iOS.
 
 ### Milestone 2 — Vault core (device vault)
-- [ ] PRF capability detection.
-- [ ] Passkey creation with PRF extension.
-- [ ] PRF → HKDF → AES-GCM encrypt/decrypt round-trip of a test mnemonic.
-- [ ] IndexedDB vault records + `navigator.storage.persist()`.
-- [ ] Per-action ceremony: biometric → decrypt → use → wipe (no session key).
+- [x] PRF capability detection.
+- [x] Passkey creation with PRF extension.
+- [x] PRF → HKDF → AES-GCM encrypt/decrypt round-trip of a test mnemonic.
+- [x] IndexedDB vault records + `navigator.storage.persist()`.
+- [x] Per-action ceremony: biometric → decrypt → use → wipe (no session key).
 
 ### Milestone 3 — Default onboarding & recovery UX
-- [ ] One-tap default: automatically create the initial device vault + account;
+- [x] One-tap default: automatically create the initial device vault + account;
   never ask a default user to create either.
-- [ ] After biometric setup, land directly on balance + prominent Receive / Send.
+- [x] After biometric setup, land directly on balance + prominent Receive / Send.
 - [ ] Optional (skippable) backup + verification quiz.
-- [ ] Unsupported-device wall when PRF is unavailable (device vaults).
+- [x] Unsupported-device wall when PRF is unavailable (device vaults).
 - [ ] Put restore-from-mnemonic and multi-vault management in Advanced mode.
 
 ### Milestone 4 — Accounts + Base integration
