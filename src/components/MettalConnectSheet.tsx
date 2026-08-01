@@ -11,6 +11,7 @@ type MettalConnectSheetProps = {
   connected: boolean;
   secureStorageAvailable: boolean;
   onClose: () => void;
+  onContinue: () => void;
   onCredentials: (credentials: MettalCredentials) => Promise<void>;
 };
 
@@ -19,6 +20,7 @@ export function MettalConnectSheet({
   connected,
   secureStorageAvailable,
   onClose,
+  onContinue,
   onCredentials,
 }: MettalConnectSheetProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -134,7 +136,7 @@ export function MettalConnectSheet({
             </p>
             <button
               type="button"
-              onClick={onClose}
+              onClick={onContinue}
               className="mt-8 min-h-14 rounded-2xl bg-accent px-5 py-3 font-semibold text-white transition active:scale-[0.99]"
             >
               Continuar

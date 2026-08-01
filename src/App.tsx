@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { HomeScreen } from "./screens/HomeScreen";
 import { MenuSheet } from "./components/MenuSheet";
 import { MettalConnectSheet } from "./components/MettalConnectSheet";
+import { AcquireDepositSheet } from "./components/AcquireDepositSheet";
 import { SetupScreen } from "./screens/SetupScreen";
 import { UnsupportedScreen } from "./screens/UnsupportedScreen";
 import { isPrfSupported, getWebAuthnHostHint } from "./lib/webauthn/prf";
@@ -28,10 +29,14 @@ const isLocalDesignPreview =
 export default function App() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [mettalOpen, setMettalOpen] = useState(false);
+  const [depositOpen, setDepositOpen] = useState(false);
   const [boot, setBoot] = useState<BootState>({ status: "loading" });
   const [setupBusy, setSetupBusy] = useState(false);
   const [setupError, setSetupError] = useState<string | null>(null);
   const [unlockHint, setUnlockHint] = useState<string | null>(null);
+
+  const mettalConnected =
+    boot.status === "ready" && Boolean(boot.vault.mettalCredentials);
 
   useEffect(() => {
     let cancelled = false;
@@ -148,6 +153,19 @@ export default function App() {
     })();
   }
 
+  function handleAdd() {
+    if (mettalConnected) {
+      setDepositOpen(true);
+      return;
+    }
+    setMettalOpen(true);
+  }
+
+  function handleMettalContinue() {
+    setMettalOpen(false);
+    setDepositOpen(true);
+  }
+
   return (
     <div className="mx-auto flex min-h-dvh w-full max-w-md flex-col px-5 pb-[max(1.5rem,env(safe-area-inset-bottom))] pt-[max(1rem,env(safe-area-inset-top))]">
       <header className="flex items-center justify-between py-3">
@@ -187,7 +205,7 @@ export default function App() {
           />
         ) : null}
         {boot.status === "ready" || boot.status === "design-preview" ? (
-          <HomeScreen onAdd={() => setMettalOpen(true)} />
+          <HomeScreen onAdd={handleAdd} />
         ) : null}
       </main>
 
@@ -197,9 +215,7 @@ export default function App() {
           onClose={() => setMenuOpen(false)}
           onTestUnlock={handleTestUnlock}
           onDisconnectMettal={
-            import.meta.env.DEV &&
-            boot.status === "ready" &&
-            Boolean(boot.vault.mettalCredentials)
+            import.meta.env.DEV && mettalConnected
               ? handleDisconnectMettal
               : undefined
           }
@@ -208,15 +224,21 @@ export default function App() {
       ) : null}
 
       {boot.status === "ready" || boot.status === "design-preview" ? (
-        <MettalConnectSheet
-          open={mettalOpen}
-          connected={
-            boot.status === "ready" && Boolean(boot.vault.mettalCredentials)
-          }
-          secureStorageAvailable={boot.status === "ready"}
-          onClose={() => setMettalOpen(false)}
-          onCredentials={handleMettalCredentials}
-        />
+        <>
+          <MettalConnectSheet
+            open={mettalOpen}
+            connected={mettalConnected}
+            secureStorageAvailable={boot.status === "ready"}
+            onClose={() => setMettalOpen(false)}
+            onContinue={handleMettalContinue}
+            onCredentials={handleMettalCredentials}
+          />
+          <AcquireDepositSheet
+            open={depositOpen}
+            vault={boot.status === "ready" ? boot.vault : null}
+            onClose={() => setDepositOpen(false)}
+          />
+        </>
       ) : null}
     </div>
   );

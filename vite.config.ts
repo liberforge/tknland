@@ -66,11 +66,25 @@ export default defineConfig(({ mode }) => {
       port: 5173,
       // Suffix form allows any subdomain without committing a tunnel URL.
       allowedHosts: [".ngrok-free.dev", ".ngrok-free.app", ".ngrok.io"],
+      proxy: {
+        "/mettal-api": {
+          target: "https://api.v1.stg.mettal.io",
+          changeOrigin: true,
+          rewrite: (path) => path.replace(/^\/mettal-api/, ""),
+        },
+      },
     },
     preview: {
       host: "127.0.0.1",
       port: 5173,
       allowedHosts: [".ngrok-free.dev", ".ngrok-free.app", ".ngrok.io"],
+      proxy: {
+        "/mettal-api": {
+          target: "https://api.v1.stg.mettal.io",
+          changeOrigin: true,
+          rewrite: (path) => path.replace(/^\/mettal-api/, ""),
+        },
+      },
     },
   };
 });

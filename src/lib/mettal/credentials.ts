@@ -8,8 +8,9 @@ import { putVault } from "@/lib/vault/db";
 import { withDeviceVaultKey } from "@/lib/vault/ceremony";
 import type { DeviceVaultRecord } from "@/lib/vault/types";
 
+/** Dev uses Vite proxy (`/mettal-api` → staging) to avoid CORS on localhost. */
 export const METTAL_API_URL = import.meta.env.DEV
-  ? "https://api.v1.stg.mettal.io"
+  ? "/mettal-api"
   : "https://api.v1.mettal.io";
 
 export const METTAL_PORTAL_URL = "https://mettal.io";
