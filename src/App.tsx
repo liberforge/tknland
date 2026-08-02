@@ -3,9 +3,18 @@ import { HomeScreen } from "./screens/HomeScreen";
 import { MenuSheet } from "./components/MenuSheet";
 import { MettalConnectSheet } from "./components/MettalConnectSheet";
 import { AcquireDepositSheet } from "./components/AcquireDepositSheet";
+import {
+  SendScreen,
+  type SendScreenMode,
+} from "./screens/SendScreen";
+import { HandshakeSheet } from "./components/HandshakeSheet";
 import { SetupScreen } from "./screens/SetupScreen";
 import { UnsupportedScreen } from "./screens/UnsupportedScreen";
-import { isPrfSupported, getWebAuthnHostHint } from "./lib/webauthn/prf";
+import {
+  getWebAuthnHostHint,
+  isMockBiometrics,
+  isPrfSupported,
+} from "./lib/webauthn/prf";
 import { getActiveDeviceVault } from "./lib/vault/db";
 import { createInitialDeviceVault, verifyVaultUnlock } from "./lib/vault/ceremony";
 import type { DeviceVaultRecord } from "./lib/vault/types";
@@ -14,39 +23,57 @@ import {
   storeMettalCredentials,
   type MettalCredentials,
 } from "./lib/mettal/credentials";
+import {
+  clearLocationHash,
+  parseHandshakeLink,
+  type HandshakeLink,
+} from "./lib/protocol/links";
+import { getPrimaryAddress } from "./lib/vault/evm";
+import { getPenmtBalance } from "./lib/evm/penmt";
 
 type BootState =
   | { status: "loading" }
   | { status: "unsupported"; reason?: string }
   | { status: "setup" }
-  | { status: "design-preview" }
   | { status: "ready"; vault: DeviceVaultRecord };
 
-const isLocalDesignPreview =
-  import.meta.env.DEV &&
-  window.location.origin === "http://127.0.0.1:5173";
+const mockBiometrics = isMockBiometrics();
 
 export default function App() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [mettalOpen, setMettalOpen] = useState(false);
   const [depositOpen, setDepositOpen] = useState(false);
+  const [sendMode, setSendMode] = useState<SendScreenMode | null>(null);
+  const [handshakeLink, setHandshakeLink] = useState<HandshakeLink | null>(
+    null,
+  );
   const [boot, setBoot] = useState<BootState>({ status: "loading" });
   const [setupBusy, setSetupBusy] = useState(false);
   const [setupError, setSetupError] = useState<string | null>(null);
   const [unlockHint, setUnlockHint] = useState<string | null>(null);
+  const [homeBalance, setHomeBalance] = useState<string | null>(null);
 
   const mettalConnected =
     boot.status === "ready" && Boolean(boot.vault.mettalCredentials);
+
+  const refreshBalance = useCallback(async (vault: DeviceVaultRecord) => {
+    const address = getPrimaryAddress(vault);
+    if (!address) {
+      setHomeBalance("0.00");
+      return;
+    }
+    try {
+      const { formatted } = await getPenmtBalance(address);
+      setHomeBalance(formatted);
+    } catch {
+      // Keep last known balance on RPC blips; if still unknown, leave blank.
+    }
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
 
     (async () => {
-      if (isLocalDesignPreview) {
-        setBoot({ status: "design-preview" });
-        return;
-      }
-
       const hostHint = getWebAuthnHostHint();
       if (hostHint) {
         if (!cancelled) {
@@ -69,6 +96,7 @@ export default function App() {
       if (cancelled) return;
       if (vault) {
         setBoot({ status: "ready", vault });
+        void refreshBalance(vault);
       } else {
         setBoot({ status: "setup" });
       }
@@ -83,6 +111,23 @@ export default function App() {
     return () => {
       cancelled = true;
     };
+  }, [refreshBalance]);
+
+  useEffect(() => {
+    function consumeHash() {
+      const parsed = parseHandshakeLink(window.location.hash);
+      if (!parsed) return;
+      clearLocationHash();
+      setSendMode(null);
+      setDepositOpen(false);
+      setMettalOpen(false);
+      setMenuOpen(false);
+      setHandshakeLink(parsed);
+    }
+
+    consumeHash();
+    window.addEventListener("hashchange", consumeHash);
+    return () => window.removeEventListener("hashchange", consumeHash);
   }, []);
 
   async function handleSetup() {
@@ -91,6 +136,7 @@ export default function App() {
     try {
       const vault = await createInitialDeviceVault();
       setBoot({ status: "ready", vault });
+      void refreshBalance(vault);
     } catch (err) {
       const message =
         err instanceof Error ? err.message : "No se pudo crear la billetera";
@@ -104,17 +150,27 @@ export default function App() {
     }
   }
 
+  const handleEnsureVault = useCallback(async () => {
+    if (boot.status === "ready") return boot.vault;
+    const vault = await createInitialDeviceVault();
+    setBoot({ status: "ready", vault });
+    void refreshBalance(vault);
+    return vault;
+  }, [boot, refreshBalance]);
+
   async function handleTestUnlock() {
-    if (boot.status === "design-preview") {
-      setUnlockHint("Biometría desactivada en la vista previa local");
-      return;
-    }
     if (boot.status !== "ready") return;
-    setUnlockHint("Esperando la biometría…");
+    setUnlockHint(
+      mockBiometrics
+        ? "Desbloqueo mock…"
+        : "Esperando la biometría…",
+    );
     try {
       const { wordCount } = await verifyVaultUnlock(boot.vault);
       setUnlockHint(
-        `Listo: frase de ${wordCount} palabras descifrada y luego borrada`,
+        mockBiometrics
+          ? `Mock OK: frase de ${wordCount} palabras`
+          : `Listo: frase de ${wordCount} palabras descifrada y luego borrada`,
       );
     } catch (err) {
       setUnlockHint(err instanceof Error ? err.message : "Error al desbloquear");
@@ -124,9 +180,7 @@ export default function App() {
   const handleMettalCredentials = useCallback(
     async (credentials: MettalCredentials) => {
       if (boot.status !== "ready") {
-        throw new Error(
-          "Abre http://localhost:5173 para guardar las credenciales con biometría.",
-        );
+        throw new Error("La billetera aún no está lista.");
       }
 
       const vault = await storeMettalCredentials(boot.vault, credentials);
@@ -166,18 +220,30 @@ export default function App() {
     setDepositOpen(true);
   }
 
+  const handshakeOpen = handshakeLink !== null;
+  const readyVault = boot.status === "ready" ? boot.vault : null;
+
   return (
-    <div className="mx-auto flex min-h-dvh w-full max-w-md flex-col px-5 pb-[max(1.5rem,env(safe-area-inset-bottom))] pt-[max(1rem,env(safe-area-inset-top))]">
-      <header className="flex items-center justify-between py-3">
-        <p className="text-2xl font-semibold tracking-tight text-ink">
-          {import.meta.env.DEV ? "DEV tkn.land" : "tkn.land"}
+    <div className="mx-auto flex min-h-dvh w-full max-w-md flex-col px-5 pb-[max(2.75rem,env(safe-area-inset-bottom))] pt-[max(0.5rem,env(safe-area-inset-top))]">
+      <header className="flex items-center justify-between pb-3 pt-0">
+        <p className="text-[1.65rem] font-semibold tracking-tight text-ink">
+          {import.meta.env.DEV ? (
+            <>
+              <span className="mr-2 align-middle text-[0.65rem] font-semibold tracking-[0.14em] text-accent uppercase">
+                {mockBiometrics ? "Mock" : "Dev"}
+              </span>
+              tkn.land
+            </>
+          ) : (
+            "tkn.land"
+          )}
         </p>
-        {boot.status === "ready" || boot.status === "design-preview" ? (
+        {boot.status === "ready" ? (
           <button
             type="button"
             aria-label="Abrir menú"
             onClick={() => setMenuOpen(true)}
-            className="grid h-11 w-11 place-items-center rounded-xl border border-line bg-surface-raised text-ink"
+            className="grid h-11 w-11 place-items-center rounded-xl border border-line/80 bg-surface-raised/80 text-ink backdrop-blur-sm transition active:scale-[0.96]"
           >
             <span className="flex w-5 flex-col gap-1.5" aria-hidden>
               <span className="h-0.5 w-full rounded bg-ink" />
@@ -197,19 +263,40 @@ export default function App() {
         {boot.status === "unsupported" ? (
           <UnsupportedScreen reason={boot.reason} />
         ) : null}
-        {boot.status === "setup" ? (
+        {boot.status === "setup" && !handshakeOpen ? (
           <SetupScreen
             busy={setupBusy}
             error={setupError}
             onSetup={handleSetup}
+            mockBiometrics={mockBiometrics}
           />
         ) : null}
-        {boot.status === "ready" || boot.status === "design-preview" ? (
-          <HomeScreen onAdd={handleAdd} />
+        {boot.status === "setup" && handshakeOpen ? (
+          <p className="py-16 text-center text-ink-muted">
+            Abre el enlace para continuar…
+          </p>
+        ) : null}
+        {boot.status === "ready" && sendMode == null ? (
+          <HomeScreen
+            balanceAmount={homeBalance}
+            onAdd={handleAdd}
+            onSend={() => setSendMode("send")}
+            onRequest={() => setSendMode("request")}
+          />
+        ) : null}
+        {boot.status === "ready" && sendMode != null ? (
+          <SendScreen
+            mode={sendMode}
+            vault={boot.vault}
+            onBack={() => setSendMode(null)}
+            onVaultUpdated={(vault) => {
+              setBoot({ status: "ready", vault });
+            }}
+          />
         ) : null}
       </main>
 
-      {boot.status === "ready" || boot.status === "design-preview" ? (
+      {boot.status === "ready" ? (
         <MenuSheet
           open={menuOpen}
           onClose={() => setMenuOpen(false)}
@@ -223,23 +310,47 @@ export default function App() {
         />
       ) : null}
 
-      {boot.status === "ready" || boot.status === "design-preview" ? (
+      {boot.status === "ready" ? (
         <>
           <MettalConnectSheet
             open={mettalOpen}
             connected={mettalConnected}
-            secureStorageAvailable={boot.status === "ready"}
+            secureStorageAvailable
+            mockBiometrics={mockBiometrics}
             onClose={() => setMettalOpen(false)}
             onContinue={handleMettalContinue}
             onCredentials={handleMettalCredentials}
           />
           <AcquireDepositSheet
             open={depositOpen}
-            vault={boot.status === "ready" ? boot.vault : null}
+            vault={boot.vault}
             onClose={() => setDepositOpen(false)}
+            onVaultUpdated={(vault) => {
+              setBoot({ status: "ready", vault });
+            }}
+            onBalanceConfirmed={(balanceFormatted) => {
+              setHomeBalance(balanceFormatted);
+            }}
           />
         </>
       ) : null}
+
+      <HandshakeSheet
+        open={handshakeOpen}
+        link={handshakeLink}
+        vault={readyVault}
+        mockBiometrics={mockBiometrics}
+        onClose={() => setHandshakeLink(null)}
+        onEnsureVault={handleEnsureVault}
+        onVaultUpdated={(vault) => {
+          setBoot({ status: "ready", vault });
+        }}
+        onBalanceRefresh={() => {
+          void getActiveDeviceVault().then((vault) => {
+            if (vault) void refreshBalance(vault);
+          });
+        }}
+      />
     </div>
   );
 }

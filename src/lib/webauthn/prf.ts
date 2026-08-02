@@ -1,4 +1,11 @@
 import { base64UrlToBytes, bytesToBase64Url, wipeBytes } from "@/lib/bytes";
+import {
+  isMockBiometrics,
+  mockCredentialId,
+  mockPrfOutput,
+} from "@/lib/webauthn/mock-biometrics";
+
+export { isMockBiometrics } from "@/lib/webauthn/mock-biometrics";
 
 type PrfExtensionOutputs = {
   enabled?: boolean;
@@ -18,6 +25,7 @@ function getRpId(): string {
 }
 
 export function getWebAuthnHostHint(): string | null {
+  if (isMockBiometrics()) return null;
   const host = window.location.hostname;
   if (host === "127.0.0.1" || host === "[::1]" || host === "::1") {
     return "Abre http://localhost:5173 en lugar de 127.0.0.1: la biometría necesita un nombre de host.";
@@ -38,6 +46,8 @@ function webAuthnCreateHint(err: unknown): string {
 }
 
 export async function isPrfSupported(): Promise<boolean> {
+  if (isMockBiometrics()) return true;
+
   if (typeof window === "undefined" || !window.PublicKeyCredential) {
     return false;
   }
@@ -73,6 +83,13 @@ export type PasskeyWithPrf = {
 export async function createPasskeyWithPrf(
   prfSalt: Uint8Array,
 ): Promise<PasskeyWithPrf> {
+  if (isMockBiometrics()) {
+    return {
+      credentialId: mockCredentialId(),
+      prfOutput: await mockPrfOutput(prfSalt),
+    };
+  }
+
   const challenge = crypto.getRandomValues(new Uint8Array(32));
   const userId = crypto.getRandomValues(new Uint8Array(16));
 
@@ -139,6 +156,10 @@ export async function assertPasskeyWithPrf(opts: {
   credentialId: Uint8Array;
   prfSalt: Uint8Array;
 }): Promise<Uint8Array> {
+  if (isMockBiometrics()) {
+    return mockPrfOutput(opts.prfSalt);
+  }
+
   const challenge = crypto.getRandomValues(new Uint8Array(32));
   const credentialIdB64 = bytesToBase64Url(opts.credentialId);
 

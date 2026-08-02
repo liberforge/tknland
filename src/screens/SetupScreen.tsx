@@ -2,25 +2,32 @@ type SetupScreenProps = {
   busy: boolean;
   error: string | null;
   onSetup: () => void;
+  mockBiometrics?: boolean;
 };
 
-export function SetupScreen({ busy, error, onSetup }: SetupScreenProps) {
+export function SetupScreen({
+  busy,
+  error,
+  onSetup,
+  mockBiometrics = false,
+}: SetupScreenProps) {
   return (
     <section className="flex flex-1 flex-col justify-between gap-10 py-6">
-      <div className="rounded-3xl border border-line bg-surface-raised/80 px-6 py-10">
-        <p className="text-sm font-medium tracking-wide text-ink-muted uppercase">
+      <div className="animate-rise px-1 pt-6">
+        <p className="text-[0.7rem] font-medium tracking-[0.22em] text-accent uppercase">
           Bienvenido
         </p>
-        <h1 className="mt-3 text-3xl font-semibold tracking-tight text-ink">
-          Tu billetera, protegida con biometría
+        <h1 className="mt-4 text-4xl font-semibold leading-tight tracking-tight text-ink">
+          Tu billetera, solo tuya
         </h1>
-        <p className="mt-4 text-base leading-relaxed text-ink-muted">
-          Toca el botón para crear tu billetera. Te pediremos Face ID o tu
-          huella digital, sin ninguna configuración adicional.
+        <p className="mt-5 max-w-[20rem] text-base leading-relaxed text-ink-muted">
+          {mockBiometrics
+            ? "Modo mock activo: se creará una bóveda local sin Face ID ni huella."
+            : "Toca el botón para crearla. Te pediremos Face ID o tu huella, sin ninguna configuración adicional."}
         </p>
       </div>
 
-      <div className="flex flex-col gap-3">
+      <div className="animate-rise-delay-2 flex flex-col gap-3">
         {error ? (
           <p className="rounded-xl border border-danger/40 bg-danger/10 px-4 py-3 text-sm text-ink">
             {error}
@@ -30,9 +37,13 @@ export function SetupScreen({ busy, error, onSetup }: SetupScreenProps) {
           type="button"
           disabled={busy}
           onClick={onSetup}
-          className="min-h-14 rounded-2xl bg-accent px-5 text-lg font-semibold text-ink shadow-[0_10px_30px_rgba(77,141,255,0.25)] transition active:scale-[0.98] disabled:opacity-60"
+          className="min-h-14 rounded-2xl bg-accent px-5 text-lg font-semibold text-surface transition active:scale-[0.98] disabled:opacity-60"
         >
-          {busy ? "Configurando…" : "Continuar con biometría"}
+          {busy
+            ? "Configurando…"
+            : mockBiometrics
+              ? "Crear billetera (mock)"
+              : "Crear mi billetera"}
         </button>
       </div>
     </section>

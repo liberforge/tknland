@@ -1,9 +1,11 @@
 import type { AppMeta, VaultRecord } from "@/lib/vault/types";
+import type { PaymentIntent } from "@/lib/protocol/types";
 
 const DB_NAME = "tknland";
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const VAULTS = "vaults";
 const META = "meta";
+const INTENTS = "intents";
 const META_KEY = "app";
 
 function openDb(): Promise<IDBDatabase> {
@@ -19,6 +21,9 @@ function openDb(): Promise<IDBDatabase> {
       }
       if (!db.objectStoreNames.contains(META)) {
         db.createObjectStore(META);
+      }
+      if (!db.objectStoreNames.contains(INTENTS)) {
+        db.createObjectStore(INTENTS, { keyPath: "id" });
       }
     };
   });
@@ -105,4 +110,38 @@ export async function getActiveDeviceVault(): Promise<
     if (active) return active;
   }
   return devices[0] ?? null;
+}
+
+export async function getIntent(
+  id: string,
+): Promise<PaymentIntent | undefined> {
+  const db = await openDb();
+  try {
+    const tx = db.transaction(INTENTS, "readonly");
+    return await idbReq<PaymentIntent | undefined>(
+      tx.objectStore(INTENTS).get(id),
+    );
+  } finally {
+    db.close();
+  }
+}
+
+export async function putIntent(intent: PaymentIntent): Promise<void> {
+  const db = await openDb();
+  try {
+    const tx = db.transaction(INTENTS, "readwrite");
+    await idbReq(tx.objectStore(INTENTS).put(intent));
+  } finally {
+    db.close();
+  }
+}
+
+export async function listIntents(): Promise<PaymentIntent[]> {
+  const db = await openDb();
+  try {
+    const tx = db.transaction(INTENTS, "readonly");
+    return await idbReq(tx.objectStore(INTENTS).getAll());
+  } finally {
+    db.close();
+  }
 }

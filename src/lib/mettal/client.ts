@@ -41,6 +41,29 @@ type EnsureAcquireAccountResponse = {
   data: MettalAcquireAccount;
 };
 
+export type MettalAcquireChallenge = {
+  message: string;
+  expiresAt: string;
+};
+
+type AcquireChallengeResponse = {
+  success: boolean;
+  data: MettalAcquireChallenge;
+};
+
+export type MettalAcquireResult = {
+  workflowId: string;
+  symbol: string;
+  amount: number;
+};
+
+type AcquireTokensResponse = {
+  success: boolean;
+  data: MettalAcquireResult;
+};
+
+export const METTAL_ACQUIRE_NETWORK = "base";
+
 type MettalApiErrorBody = {
   code?: string;
   message?: string;
@@ -163,8 +186,93 @@ export async function ensureAcquireAccount(options: {
   return account;
 }
 
+/** One-time EIP-191 challenge for minting to an unregistered Base address. */
+export async function issueAcquireChallenge(options: {
+  accessToken: string;
+  address: string;
+  network?: string;
+}): Promise<MettalAcquireChallenge> {
+  const network = (options.network ?? METTAL_ACQUIRE_NETWORK).trim().toLowerCase();
+  const response = await fetch(`${METTAL_API_URL}/v1/tokens/acquire-challenge`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${options.accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      address: options.address.trim(),
+      network,
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(await readMettalError(response));
+  }
+
+  const body = (await response.json()) as AcquireChallengeResponse;
+  if (
+    !body.success ||
+    !body.data?.message?.trim() ||
+    !body.data?.expiresAt?.trim()
+  ) {
+    throw new Error("Mettal no devolvió un challenge de propiedad.");
+  }
+  return body.data;
+}
+
+/** Request token mint to a Base address (with ownership proof when required). */
+export async function acquireTokens(options: {
+  accessToken: string;
+  amount: number;
+  address: string;
+  message: string;
+  signature: string;
+  symbol?: string;
+  network?: string;
+}): Promise<MettalAcquireResult> {
+  const symbol = (options.symbol ?? METTAL_DEFAULT_SYMBOL).trim().toUpperCase();
+  const network = (options.network ?? METTAL_ACQUIRE_NETWORK).trim().toLowerCase();
+  const response = await fetch(`${METTAL_API_URL}/v1/tokens/acquire`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${options.accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      symbol,
+      network,
+      address: options.address.trim(),
+      amount: options.amount,
+      message: options.message,
+      signature: options.signature,
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(await readMettalError(response));
+  }
+
+  const body = (await response.json()) as AcquireTokensResponse;
+  if (
+    !body.success ||
+    !body.data?.workflowId?.trim() ||
+    typeof body.data.amount !== "number"
+  ) {
+    throw new Error("Mettal no aceptó la solicitud de adquisición.");
+  }
+  return body.data;
+}
+
 export function formatMettalMajor(minor: number): string {
   return (minor / METTAL_MINOR_UNIT_SCALE).toFixed(2);
+}
+
+/** Display amount with thousands separators (e.g. "5,999,061.90"). */
+export function formatMettalMajorGrouped(minor: number): string {
+  return new Intl.NumberFormat("en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(minor / METTAL_MINOR_UNIT_SCALE);
 }
 
 /** Parses a major-unit amount string (e.g. "12.50" or "12,50") into minor units. */

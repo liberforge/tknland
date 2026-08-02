@@ -10,6 +10,7 @@ type MettalConnectSheetProps = {
   open: boolean;
   connected: boolean;
   secureStorageAvailable: boolean;
+  mockBiometrics?: boolean;
   onClose: () => void;
   onContinue: () => void;
   onCredentials: (credentials: MettalCredentials) => Promise<void>;
@@ -19,6 +20,7 @@ export function MettalConnectSheet({
   open,
   connected,
   secureStorageAvailable,
+  mockBiometrics = false,
   onClose,
   onContinue,
   onCredentials,
@@ -103,23 +105,12 @@ export function MettalConnectSheet({
       aria-labelledby="mettal-connect-title"
     >
       <section className="flex w-full max-w-md flex-col overflow-y-auto rounded-3xl border border-line bg-surface px-5 py-5 shadow-2xl">
-        <div className="flex items-center justify-between gap-4">
-          <h1
-            id="mettal-connect-title"
-            className="text-2xl font-semibold text-ink"
-          >
-            Conectar Mettal
-          </h1>
-          <button
-            type="button"
-            onClick={onClose}
-            disabled={saving}
-            aria-label="Cerrar"
-            className="grid h-11 w-11 shrink-0 place-items-center rounded-xl border border-line bg-surface-raised text-2xl text-ink disabled:opacity-50"
-          >
-            ×
-          </button>
-        </div>
+        <h1
+          id="mettal-connect-title"
+          className="text-2xl font-semibold text-ink"
+        >
+          Conectar Mettal
+        </h1>
 
         {connected ? (
           <div className="mt-6 flex flex-1 flex-col text-center">
@@ -137,7 +128,7 @@ export function MettalConnectSheet({
             <button
               type="button"
               onClick={onContinue}
-              className="mt-8 min-h-14 rounded-2xl bg-accent px-5 py-3 font-semibold text-white transition active:scale-[0.99]"
+              className="mt-8 min-h-14 rounded-2xl bg-accent px-5 py-3 font-semibold text-surface transition active:scale-[0.99]"
             >
               Continuar
             </button>
@@ -177,7 +168,9 @@ export function MettalConnectSheet({
 
             {saving ? (
               <p className="mt-6 rounded-2xl border border-line bg-surface-raised p-4 text-sm text-ink">
-                Confirma tu biometría para cifrar y guardar las credenciales…
+                {mockBiometrics
+                  ? "Cifrando y guardando las credenciales (mock)…"
+                  : "Confirma tu biometría para cifrar y guardar las credenciales…"}
               </p>
             ) : null}
 
@@ -197,11 +190,20 @@ export function MettalConnectSheet({
                   setError(null);
                   setScanning(true);
                 }}
-                className="mt-6 min-h-14 rounded-2xl bg-accent px-5 py-3 font-semibold text-white transition active:scale-[0.99]"
+                className="mt-6 min-h-14 rounded-2xl bg-accent px-5 py-3 font-semibold text-surface transition active:scale-[0.99]"
               >
                 Escanear código QR
               </button>
             ) : null}
+
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={saving}
+              className="mt-3 min-h-14 rounded-2xl border border-line bg-surface-raised px-5 py-3 font-semibold text-ink transition active:scale-[0.99] disabled:opacity-50"
+            >
+              Cancelar
+            </button>
           </>
         )}
       </section>

@@ -110,3 +110,48 @@ export async function withMettalCredentials<T>(
     credentials = null;
   }
 }
+
+/** One biometric unlock: decrypt seed + Mettal credentials together. */
+export async function withMettalCredentialsAndSeed<T>(
+  vault: DeviceVaultRecord,
+  use: (ctx: {
+    credentials: MettalCredentials;
+    mnemonic: string;
+  }) => Promise<T> | T,
+): Promise<T> {
+  const encrypted = vault.mettalCredentials;
+  if (!encrypted) {
+    throw new Error("Mettal no está conectado.");
+  }
+
+  const seedIv = base64UrlToBytes(vault.iv);
+  const seedCiphertext = base64UrlToBytes(vault.ciphertext);
+  const credIv = base64UrlToBytes(encrypted.iv);
+  const credCiphertext = base64UrlToBytes(encrypted.ciphertext);
+  let mnemonic: string | null = null;
+  let credPlaintext: string | null = null;
+  let credentials: MettalCredentials | null = null;
+
+  try {
+    return await withDeviceVaultKey(vault, async (key) => {
+      mnemonic = await decryptUtf8(
+        { iv: seedIv, ciphertext: seedCiphertext },
+        key,
+      );
+      credPlaintext = await decryptUtf8(
+        { iv: credIv, ciphertext: credCiphertext },
+        key,
+      );
+      credentials = parseMettalQrPayload(credPlaintext);
+      return await use({ credentials, mnemonic });
+    });
+  } finally {
+    wipeBytes(seedIv);
+    wipeBytes(seedCiphertext);
+    wipeBytes(credIv);
+    wipeBytes(credCiphertext);
+    mnemonic = null;
+    credPlaintext = null;
+    credentials = null;
+  }
+}
