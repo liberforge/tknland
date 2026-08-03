@@ -110,7 +110,7 @@ export function AcquireDepositSheet({
     let cancelled = false;
     setStep({
       kind: "loading",
-      message: "Confirma tu biometría y consulta tu saldo…",
+      message: "Confirmando acceso y consultando tu saldo…",
     });
     setCopied(false);
     setAmountInput("");
@@ -156,6 +156,10 @@ export function AcquireDepositSheet({
           return;
         }
 
+        setStep({
+          kind: "loading",
+          message: "Consultando tu cuenta bancaria…",
+        });
         const bankAccount = await ensureAcquireAccount({
           accessToken: unlocked.accessToken,
         });
@@ -405,13 +409,17 @@ export function AcquireDepositSheet({
 
         {step.kind === "loading" || step.kind === "acquiring" ? (
           <>
-            <p className="mt-6 rounded-2xl border border-line bg-surface-raised p-4 text-sm text-ink">
-              {step.message}
-            </p>
+            <div className="mt-8 flex flex-col items-center gap-5 px-2 py-6 text-center">
+              <div
+                className="h-10 w-10 animate-spin rounded-full border-2 border-line border-t-accent"
+                aria-hidden="true"
+              />
+              <p className="text-base leading-6 text-ink">{step.message}</p>
+            </div>
             <button
               type="button"
               onClick={onClose}
-              className="mt-8 min-h-14 rounded-2xl border border-line bg-surface-raised px-5 py-3 font-semibold text-ink transition active:scale-[0.99]"
+              className="mt-4 min-h-14 rounded-2xl border border-line bg-surface-raised px-5 py-3 font-semibold text-ink transition active:scale-[0.99]"
             >
               Cancelar
             </button>
@@ -562,7 +570,7 @@ export function AcquireDepositSheet({
               <p className="text-xs font-medium tracking-wide text-ink-muted uppercase">
                 Cuenta bancaria {step.account.currency}
               </p>
-              <p className="mt-3 break-all font-mono text-xl font-semibold tracking-wide text-ink">
+              <p className="mt-3 font-mono text-sm font-semibold tabular-nums tracking-tight text-ink whitespace-nowrap">
                 {step.account.bankAccount}
               </p>
               <button
