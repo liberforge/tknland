@@ -3,6 +3,7 @@ type HomeScreenProps = {
   onAdd: () => void;
   onSend: () => void;
   onRequest: () => void;
+  onWithdraw: () => void;
 };
 
 export function HomeScreen({
@@ -10,6 +11,7 @@ export function HomeScreen({
   onAdd,
   onSend,
   onRequest,
+  onWithdraw,
 }: HomeScreenProps) {
   const balanceReady = balanceAmount != null;
 
@@ -83,6 +85,7 @@ export function HomeScreen({
           label="Retirar"
           hint="A tu cuenta bancaria"
           glyph="withdraw"
+          onClick={onWithdraw}
         />
       </div>
     </section>

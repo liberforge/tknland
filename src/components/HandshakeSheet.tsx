@@ -536,20 +536,22 @@ export function HandshakeSheet({
                 {step.amountError}
               </p>
             ) : null}
-            <button
-              type="button"
-              onClick={() => void handleEnterAmountContinue()}
-              className="mt-8 min-h-14 rounded-2xl bg-accent px-5 py-3 font-semibold text-surface transition active:scale-[0.99]"
-            >
-              Continuar
-            </button>
-            <button
-              type="button"
-              onClick={onClose}
-              className="mt-3 min-h-14 rounded-2xl border border-line bg-surface-raised px-5 py-3 font-semibold text-ink transition active:scale-[0.99]"
-            >
-              Cancelar
-            </button>
+            <div className="mt-8 flex gap-3">
+              <button
+                type="button"
+                onClick={() => void handleEnterAmountContinue()}
+                className="min-h-14 min-w-0 flex-[2] rounded-2xl bg-accent px-4 py-3 font-semibold text-surface transition active:scale-[0.99]"
+              >
+                Continuar
+              </button>
+              <button
+                type="button"
+                onClick={onClose}
+                className="min-h-14 min-w-0 flex-1 rounded-2xl border border-line bg-surface-raised px-3 py-3 font-semibold text-ink transition active:scale-[0.99]"
+              >
+                Cancelar
+              </button>
+            </div>
           </>
         ) : null}
 
@@ -586,21 +588,23 @@ export function HandshakeSheet({
                 Necesitas una billetera para enviar. Cierra y crea una primero.
               </p>
             ) : null}
-            <button
-              type="button"
-              disabled={!vault}
-              onClick={() => void handleConfirmPay()}
-              className="mt-8 min-h-14 rounded-2xl bg-accent px-5 py-3 font-semibold text-surface transition active:scale-[0.99] disabled:opacity-50"
-            >
-              {mockBiometrics ? "Enviar" : "Confirmar con biometría"}
-            </button>
-            <button
-              type="button"
-              onClick={onClose}
-              className="mt-3 min-h-14 rounded-2xl border border-line bg-surface-raised px-5 py-3 font-semibold text-ink transition active:scale-[0.99]"
-            >
-              Cancelar
-            </button>
+            <div className="mt-8 flex gap-3">
+              <button
+                type="button"
+                disabled={!vault}
+                onClick={() => void handleConfirmPay()}
+                className="min-h-14 min-w-0 flex-[2] rounded-2xl bg-accent px-4 py-3 font-semibold text-surface transition active:scale-[0.99] disabled:opacity-50"
+              >
+                {mockBiometrics ? "Enviar" : "Confirmar con biometría"}
+              </button>
+              <button
+                type="button"
+                onClick={onClose}
+                className="min-h-14 min-w-0 flex-1 rounded-2xl border border-line bg-surface-raised px-3 py-3 font-semibold text-ink transition active:scale-[0.99]"
+              >
+                Cancelar
+              </button>
+            </div>
           </>
         ) : null}
 

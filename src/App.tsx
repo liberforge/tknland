@@ -8,6 +8,7 @@ import {
   type SendScreenMode,
 } from "./screens/SendScreen";
 import { HandshakeSheet } from "./components/HandshakeSheet";
+import { WithdrawSheet } from "./components/WithdrawSheet";
 import { SetupScreen } from "./screens/SetupScreen";
 import { UnsupportedScreen } from "./screens/UnsupportedScreen";
 import {
@@ -43,6 +44,7 @@ export default function App() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [mettalOpen, setMettalOpen] = useState(false);
   const [depositOpen, setDepositOpen] = useState(false);
+  const [withdrawOpen, setWithdrawOpen] = useState(false);
   const [sendMode, setSendMode] = useState<SendScreenMode | null>(null);
   const [handshakeLink, setHandshakeLink] = useState<HandshakeLink | null>(
     null,
@@ -120,6 +122,7 @@ export default function App() {
       clearLocationHash();
       setSendMode(null);
       setDepositOpen(false);
+      setWithdrawOpen(false);
       setMettalOpen(false);
       setMenuOpen(false);
       setHandshakeLink(parsed);
@@ -207,16 +210,34 @@ export default function App() {
     })();
   }
 
+  const [mettalContinueTarget, setMettalContinueTarget] = useState<
+    "deposit" | "withdraw"
+  >("deposit");
+
   function handleAdd() {
     if (mettalConnected) {
       setDepositOpen(true);
       return;
     }
+    setMettalContinueTarget("deposit");
+    setMettalOpen(true);
+  }
+
+  function handleWithdraw() {
+    if (mettalConnected) {
+      setWithdrawOpen(true);
+      return;
+    }
+    setMettalContinueTarget("withdraw");
     setMettalOpen(true);
   }
 
   function handleMettalContinue() {
     setMettalOpen(false);
+    if (mettalContinueTarget === "withdraw") {
+      setWithdrawOpen(true);
+      return;
+    }
     setDepositOpen(true);
   }
 
@@ -282,6 +303,7 @@ export default function App() {
             onAdd={handleAdd}
             onSend={() => setSendMode("send")}
             onRequest={() => setSendMode("request")}
+            onWithdraw={handleWithdraw}
           />
         ) : null}
         {boot.status === "ready" && sendMode != null ? (
@@ -325,6 +347,17 @@ export default function App() {
             open={depositOpen}
             vault={boot.vault}
             onClose={() => setDepositOpen(false)}
+            onVaultUpdated={(vault) => {
+              setBoot({ status: "ready", vault });
+            }}
+            onBalanceConfirmed={(balanceFormatted) => {
+              setHomeBalance(balanceFormatted);
+            }}
+          />
+          <WithdrawSheet
+            open={withdrawOpen}
+            vault={boot.vault}
+            onClose={() => setWithdrawOpen(false)}
             onVaultUpdated={(vault) => {
               setBoot({ status: "ready", vault });
             }}

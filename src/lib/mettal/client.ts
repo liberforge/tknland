@@ -11,6 +11,10 @@ export const METTAL_MINOR_UNIT_SCALE = 100;
 export const METTAL_MIN_ACQUIRE_MAJOR = 5;
 export const METTAL_MIN_ACQUIRE_MINOR =
   METTAL_MIN_ACQUIRE_MAJOR * METTAL_MINOR_UNIT_SCALE;
+/** If Mettal redeem balance is at least this (major), withdraw from Mettal first. */
+export const METTAL_REDEEM_FIRST_MAJOR = 5;
+export const METTAL_REDEEM_FIRST_MINOR =
+  METTAL_REDEEM_FIRST_MAJOR * METTAL_MINOR_UNIT_SCALE;
 
 export type MettalAcquireAccount = {
   bankAccount: string;
@@ -282,4 +286,217 @@ export function parseMettalMajorToMinor(raw: string): number | null {
   const major = Number(normalized);
   if (!Number.isFinite(major)) return null;
   return Math.round(major * METTAL_MINOR_UNIT_SCALE);
+}
+
+export type MettalDestination = {
+  id: string;
+  type: "bank_account";
+  bankAccount: string;
+  country: string;
+  currency: string;
+  symbol: string;
+  name?: string;
+};
+
+export type MettalRedeemQuote = {
+  quoteId: string;
+  expiresIn: number;
+  initialAmount: number;
+  finalAmount?: number;
+  totalFee?: number;
+  currency: string;
+  country?: string;
+};
+
+export type MettalRedeemAuthorizeResult = {
+  transactionId: string;
+  quoteId: string;
+  amount: number;
+  symbol: string;
+  status: string;
+};
+
+export type MettalRedeemStatus = {
+  transactionId: string;
+  type: string;
+  amount: number;
+  currency: string;
+  status: string;
+};
+
+export type MettalRedeemAddress = {
+  chain: string;
+  token: string;
+  address: string;
+};
+
+export async function listDestinations(options: {
+  accessToken: string;
+  country?: string;
+}): Promise<MettalDestination[]> {
+  const qs = options.country
+    ? `?country=${encodeURIComponent(options.country)}`
+    : "";
+  const response = await fetch(
+    `${METTAL_API_URL}/v1/account/destinations${qs}`,
+    {
+      method: "GET",
+      headers: { Authorization: `Bearer ${options.accessToken}` },
+    },
+  );
+  if (!response.ok) throw new Error(await readMettalError(response));
+  const body = (await response.json()) as {
+    success: boolean;
+    data: MettalDestination[];
+  };
+  if (!body.success || !Array.isArray(body.data)) {
+    throw new Error("Mettal no devolvió las cuentas bancarias.");
+  }
+  return body.data;
+}
+
+export async function registerDestination(options: {
+  accessToken: string;
+  bankAccount: string;
+  country?: string;
+}): Promise<MettalDestination> {
+  const response = await fetch(`${METTAL_API_URL}/v1/account/destinations`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${options.accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      type: "bank_account",
+      bankAccount: options.bankAccount,
+      country: options.country ?? METTAL_DEFAULT_COUNTRY,
+    }),
+  });
+  if (!response.ok) throw new Error(await readMettalError(response));
+  const body = (await response.json()) as {
+    success: boolean;
+    data: MettalDestination;
+  };
+  if (!body.success || !body.data?.id) {
+    throw new Error("Mettal no registró la cuenta bancaria.");
+  }
+  return body.data;
+}
+
+export async function deleteDestination(options: {
+  accessToken: string;
+  id: string;
+}): Promise<void> {
+  const response = await fetch(
+    `${METTAL_API_URL}/v1/account/destinations/${encodeURIComponent(options.id)}`,
+    {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${options.accessToken}` },
+    },
+  );
+  if (!response.ok) throw new Error(await readMettalError(response));
+}
+
+export async function getRedeemAddresses(options: {
+  accessToken: string;
+}): Promise<MettalRedeemAddress[]> {
+  const response = await fetch(`${METTAL_API_URL}/v1/account/redeem-address`, {
+    method: "GET",
+    headers: { Authorization: `Bearer ${options.accessToken}` },
+  });
+  if (!response.ok) throw new Error(await readMettalError(response));
+  const body = (await response.json()) as {
+    success: boolean;
+    data: MettalRedeemAddress[];
+  };
+  if (!body.success || !Array.isArray(body.data)) {
+    throw new Error("Mettal no devolvió las direcciones de retiro.");
+  }
+  return body.data;
+}
+
+export async function requestRedeemQuote(options: {
+  accessToken: string;
+  amount: number;
+  destinationId: string;
+  currency?: string;
+}): Promise<MettalRedeemQuote> {
+  const response = await fetch(`${METTAL_API_URL}/v1/redeem/quote`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${options.accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      amount: options.amount,
+      currency: options.currency ?? "PEN",
+      destinationId: options.destinationId,
+    }),
+  });
+  if (!response.ok) throw new Error(await readMettalError(response));
+  const body = (await response.json()) as {
+    success: boolean;
+    data: MettalRedeemQuote;
+  };
+  if (!body.success || !body.data?.quoteId) {
+    throw new Error("Mettal no emitió una cotización de retiro.");
+  }
+  return body.data;
+}
+
+export async function authorizeRedeem(options: {
+  accessToken: string;
+  quoteId: string;
+  destinationId: string;
+  idempotencyKey: string;
+}): Promise<MettalRedeemAuthorizeResult> {
+  const response = await fetch(`${METTAL_API_URL}/v1/redeem`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${options.accessToken}`,
+      "Content-Type": "application/json",
+      "Idempotency-Key": options.idempotencyKey,
+    },
+    body: JSON.stringify({
+      quoteId: options.quoteId,
+      destinationId: options.destinationId,
+    }),
+  });
+  if (!response.ok) throw new Error(await readMettalError(response));
+  const body = (await response.json()) as {
+    success: boolean;
+    data: MettalRedeemAuthorizeResult;
+  };
+  if (!body.success || !body.data?.transactionId) {
+    throw new Error("Mettal no aceptó el retiro.");
+  }
+  return body.data;
+}
+
+export async function getRedeemStatus(options: {
+  accessToken: string;
+  transactionId: string;
+}): Promise<MettalRedeemStatus> {
+  const response = await fetch(
+    `${METTAL_API_URL}/v1/redeem/status/${encodeURIComponent(options.transactionId)}`,
+    {
+      method: "GET",
+      headers: { Authorization: `Bearer ${options.accessToken}` },
+    },
+  );
+  if (!response.ok) throw new Error(await readMettalError(response));
+  const body = (await response.json()) as {
+    success: boolean;
+    data: MettalRedeemStatus;
+  };
+  if (!body.success || !body.data?.transactionId) {
+    throw new Error("Mettal no devolvió el estado del retiro.");
+  }
+  return body.data;
+}
+
+export function maskBankAccount(value: string): string {
+  const digits = value.replace(/\s/g, "");
+  if (digits.length <= 6) return digits;
+  return `${digits.slice(0, 4)}••••${digits.slice(-4)}`;
 }
