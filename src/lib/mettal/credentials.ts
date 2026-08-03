@@ -13,7 +13,7 @@ export const METTAL_API_URL = import.meta.env.DEV
   ? "/mettal-api"
   : "https://api.v1.mettal.io";
 
-export const METTAL_PORTAL_URL = "https://mettal.io";
+export const METTAL_PORTAL_URL = "app.mettal.io";
 
 export type MettalCredentials = {
   type: "mettal.api_key";

@@ -17,7 +17,7 @@ import {
   isPrfSupported,
 } from "./lib/webauthn/prf";
 import { getActiveDeviceVault } from "./lib/vault/db";
-import { createInitialDeviceVault, verifyVaultUnlock } from "./lib/vault/ceremony";
+import { createInitialDeviceVault, markBackupCompleted, verifyVaultUnlock, withDeviceVaultSeed } from "./lib/vault/ceremony";
 import type { DeviceVaultRecord } from "./lib/vault/types";
 import {
   disconnectMettal,
@@ -180,6 +180,19 @@ export default function App() {
     }
   }
 
+  async function handleRevealSeed(): Promise<string> {
+    if (boot.status !== "ready") {
+      throw new Error("La billetera aún no está lista.");
+    }
+    return withDeviceVaultSeed(boot.vault, (mnemonic) => mnemonic);
+  }
+
+  async function handleBackupCompleted(): Promise<void> {
+    if (boot.status !== "ready") return;
+    const vault = await markBackupCompleted(boot.vault);
+    setBoot({ status: "ready", vault });
+  }
+
   const handleMettalCredentials = useCallback(
     async (credentials: MettalCredentials) => {
       if (boot.status !== "ready") {
@@ -322,13 +335,19 @@ export default function App() {
         <MenuSheet
           open={menuOpen}
           onClose={() => setMenuOpen(false)}
-          onTestUnlock={handleTestUnlock}
+          onTestUnlock={
+            import.meta.env.DEV ? handleTestUnlock : undefined
+          }
           onDisconnectMettal={
             import.meta.env.DEV && mettalConnected
               ? handleDisconnectMettal
               : undefined
           }
           unlockHint={unlockHint}
+          backupCompleted={boot.vault.backupCompleted}
+          mockBiometrics={mockBiometrics}
+          onRevealSeed={handleRevealSeed}
+          onBackupCompleted={handleBackupCompleted}
         />
       ) : null}
 

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { BackupFlow } from "./BackupFlow";
 
 type MenuSheetProps = {
   open: boolean;
@@ -6,7 +7,13 @@ type MenuSheetProps = {
   onTestUnlock?: () => void;
   onDisconnectMettal?: () => void;
   unlockHint?: string | null;
+  backupCompleted?: boolean;
+  mockBiometrics?: boolean;
+  onRevealSeed: () => Promise<string>;
+  onBackupCompleted?: () => Promise<void>;
 };
+
+type MenuView = "menu" | "about" | "backup";
 
 export function MenuSheet({
   open,
@@ -14,9 +21,14 @@ export function MenuSheet({
   onTestUnlock,
   onDisconnectMettal,
   unlockHint,
+  backupCompleted = false,
+  mockBiometrics = false,
+  onRevealSeed,
+  onBackupCompleted,
 }: MenuSheetProps) {
   const [mounted, setMounted] = useState(open);
   const [visible, setVisible] = useState(false);
+  const [view, setView] = useState<MenuView>("menu");
 
   useEffect(() => {
     let frame = 0;
@@ -25,6 +37,7 @@ export function MenuSheet({
 
     if (open) {
       setMounted(true);
+      setView("menu");
       // Wait until the hidden panel has been painted before transitioning it in.
       frame = requestAnimationFrame(() => {
         secondFrame = requestAnimationFrame(() => setVisible(true));
@@ -43,6 +56,13 @@ export function MenuSheet({
 
   if (!mounted) return null;
 
+  const title =
+    view === "about"
+      ? "Acerca de"
+      : view === "backup"
+        ? "Copia de seguridad"
+        : "Menú";
+
   return (
     <div className="fixed inset-0 z-50 flex justify-center">
       <button
@@ -56,39 +76,107 @@ export function MenuSheet({
       <div
         role="dialog"
         aria-modal="true"
-        aria-label="Menú"
+        aria-label={title}
         className={`relative z-10 flex min-h-dvh w-full max-w-md flex-col overflow-y-auto border border-line bg-surface-raised px-5 pb-[max(1.5rem,env(safe-area-inset-bottom))] pt-[max(1rem,env(safe-area-inset-top))] transition-transform duration-[250ms] ease-out motion-reduce:transform-none motion-reduce:transition-none ${
           visible ? "translate-y-0" : "translate-y-full"
         }`}
       >
         <div className="mx-auto mb-4 h-1 w-10 rounded-full bg-line" />
-        <p className="text-xl font-semibold text-ink">Menú</p>
-        <ul className="mt-4 divide-y divide-line">
-          <MenuItem label="Copia de seguridad" hint="Próximamente" />
-          {onTestUnlock ? (
-            <MenuItem
-              label="Probar desbloqueo"
-              hint={unlockHint ?? "Biometría → descifrar → borrar"}
-              onClick={onTestUnlock}
-            />
-          ) : null}
-          {onDisconnectMettal ? (
-            <MenuItem
-              label="DEV: Disconnect mettal"
-              hint="Borra la conexión para probarla otra vez"
-              onClick={onDisconnectMettal}
-            />
-          ) : null}
-          <MenuItem label="Avanzado" hint="Próximamente" />
-          <MenuItem label="Acerca de" hint="Billetera tkn.land" />
-        </ul>
-        <button
-          type="button"
-          onClick={onClose}
-          className="mt-auto w-full rounded-xl border border-line bg-surface py-3 text-ink transition active:bg-line"
-        >
-          Cerrar
-        </button>
+        {view === "menu" ? (
+          <>
+            <p className="text-xl font-semibold text-ink">Menú</p>
+            <ul className="mt-4 divide-y divide-line">
+              <MenuItem
+                label="Copia de seguridad"
+                hint={
+                  backupCompleted
+                    ? "Ver frase secreta"
+                    : "Respalda tu frase secreta"
+                }
+                onClick={() => setView("backup")}
+              />
+              {onTestUnlock ? (
+                <MenuItem
+                  label="DEV: Probar desbloqueo"
+                  hint={unlockHint ?? "Biometría → descifrar → borrar"}
+                  onClick={onTestUnlock}
+                />
+              ) : null}
+              {onDisconnectMettal ? (
+                <MenuItem
+                  label="DEV: Disconnect mettal"
+                  hint="Borra la conexión para probarla otra vez"
+                  onClick={onDisconnectMettal}
+                />
+              ) : null}
+              <MenuItem
+                label="Acerca de"
+                hint="Billetera tkn.land"
+                onClick={() => setView("about")}
+              />
+            </ul>
+            <button
+              type="button"
+              onClick={onClose}
+              className="mt-auto w-full rounded-xl border border-line bg-surface py-3 text-ink transition active:bg-line"
+            >
+              Cerrar
+            </button>
+          </>
+        ) : null}
+        {view === "about" ? (
+          <>
+            <p className="text-xl font-semibold text-ink">Acerca de</p>
+            <div className="mt-4 space-y-4 pb-10 text-sm leading-6 text-ink-muted">
+              <p>
+                tkn.land es una billetera de{" "}
+                <span className="font-semibold text-ink">autocustodia</span>
+                {" "}(self-custody).
+              </p>
+              <p>
+                Al usar este software, aceptas su uso{" "}
+                <span className="font-semibold text-ink">tal cual</span>
+                {" "}(as-is) y eximes a los desarrolladores de cualquier
+                reclamo por daños, pérdidas o perjuicios derivados de su uso.
+              </p>
+              <p>
+                Tu clave privada se guarda en tu teléfono, protegida por la
+                seguridad biométrica del dispositivo. Esto es autocustodia
+                total: tkn.land no almacena ni registro de actividad, ni
+                contraseñas, ni claves. Todas las operaciones se ejecutan bajo
+                tu control.
+              </p>
+              <p>
+                Si pierdes, reinicias o borras el teléfono, o si se invalidan
+                las claves biométricas,{" "}
+                <span className="font-semibold text-ink">
+                  cualquier token guardado en la app es irrecuperable
+                </span>
+                . Es tu responsabilidad respaldar tus claves en un lugar
+                seguro.
+              </p>
+              <p>
+                Ten cuidado: cualquiera que tenga tu clave privada puede
+                acceder a los tokens.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setView("menu")}
+              className="mt-auto w-full rounded-xl border border-line bg-surface py-3 text-ink transition active:bg-line"
+            >
+              Volver
+            </button>
+          </>
+        ) : null}
+        {view === "backup" ? (
+          <BackupFlow
+            mockBiometrics={mockBiometrics}
+            onRevealSeed={onRevealSeed}
+            onBackupCompleted={onBackupCompleted}
+            onBack={() => setView("menu")}
+          />
+        ) : null}
       </div>
     </div>
   );

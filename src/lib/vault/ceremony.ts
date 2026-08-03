@@ -142,6 +142,17 @@ export async function verifyVaultUnlock(
   }));
 }
 
+export async function markBackupCompleted(
+  vault: DeviceVaultRecord,
+): Promise<DeviceVaultRecord> {
+  const updated: DeviceVaultRecord = {
+    ...vault,
+    backupCompleted: true,
+  };
+  await putVault(updated);
+  return updated;
+}
+
 export async function hasSharedPasskey(): Promise<boolean> {
   const meta = await getMeta();
   return Boolean(meta.credentialId);

@@ -138,8 +138,8 @@ export function MettalConnectSheet({
             <div className="mt-6 space-y-4 text-sm leading-6 text-ink-muted">
               <p>
                 En una computadora, abre{" "}
-                <span className="font-medium text-ink">{METTAL_PORTAL_URL}</span>{" "}
-                y solicita una API key. Mettal mostrará un código QR.
+                <span className="font-medium text-ink">{METTAL_PORTAL_URL}</span>
+              , opción "Mi cuenta" y solicita una API key. Mettal mostrará un código QR.
               </p>
               <p>
                 Cuando estés listo presiona el botón para escanear el código QR.
