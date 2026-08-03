@@ -170,7 +170,7 @@ export function WithdrawSheet({
     let cancelled = false;
     setStep({
       kind: "loading",
-      message: "Confirma tu biometría y consulta tu cuenta…",
+      message: "Confirmando acceso…",
     });
 
     void (async () => {
@@ -184,23 +184,12 @@ export function WithdrawSheet({
               account,
               signer,
             } = await ensurePrimaryEvmAccount(vault, mnemonic);
-            const [banks, onChain, balances] = await Promise.all([
-              listDestinations({
-                accessToken,
-                country: METTAL_DEFAULT_COUNTRY,
-              }),
-              getPenmtBalance(account.address),
-              getAccountBalances({ accessToken }),
-            ]);
             return {
               credentials,
               accessToken,
               account,
               signer,
               nextVault,
-              banks,
-              onChain,
-              balances,
             };
           },
         );
@@ -211,24 +200,43 @@ export function WithdrawSheet({
           accessToken: unlocked.accessToken,
           account: unlocked.account,
           signer: unlocked.signer,
-          redeemBalanceMinor: unlocked.balances.redeemBalance,
+          redeemBalanceMinor: 0,
         };
         onVaultUpdatedRef.current?.(unlocked.nextVault);
 
-        if (unlocked.banks.length === 0) {
+        setStep({
+          kind: "loading",
+          message: "Consultando tu cuenta en Mettal…",
+        });
+
+        const [banks, onChain, balances] = await Promise.all([
+          listDestinations({
+            accessToken: unlocked.accessToken,
+            country: METTAL_DEFAULT_COUNTRY,
+          }),
+          getPenmtBalance(unlocked.account.address),
+          getAccountBalances({ accessToken: unlocked.accessToken }),
+        ]);
+        if (cancelled) return;
+
+        if (sessionRef.current) {
+          sessionRef.current.redeemBalanceMinor = balances.redeemBalance;
+        }
+
+        if (banks.length === 0) {
           setStep({
             kind: "register-bank",
             banks: [],
-            onChainFormatted: unlocked.onChain.formatted,
+            onChainFormatted: onChain.formatted,
           });
           return;
         }
 
         setStep({
           kind: "bank",
-          banks: unlocked.banks,
-          selectedId: unlocked.banks[0]?.id ?? null,
-          onChainFormatted: unlocked.onChain.formatted,
+          banks,
+          selectedId: banks[0]?.id ?? null,
+          onChainFormatted: onChain.formatted,
         });
       } catch (err) {
         if (cancelled) return;
@@ -781,13 +789,17 @@ export function WithdrawSheet({
 
         {step.kind === "loading" || step.kind === "working" ? (
           <>
-            <p className="mt-6 rounded-2xl border border-line bg-surface-raised p-4 text-sm text-ink">
-              {step.message}
-            </p>
+            <div className="mt-8 flex flex-col items-center gap-5 px-2 py-6 text-center">
+              <div
+                className="h-10 w-10 animate-spin rounded-full border-2 border-line border-t-accent"
+                aria-hidden="true"
+              />
+              <p className="text-base leading-6 text-ink">{step.message}</p>
+            </div>
             <button
               type="button"
               onClick={onClose}
-              className="mt-8 min-h-14 rounded-2xl border border-line bg-surface-raised px-5 py-3 font-semibold text-ink transition active:scale-[0.99]"
+              className="mt-4 min-h-14 rounded-2xl border border-line bg-surface-raised px-5 py-3 font-semibold text-ink transition active:scale-[0.99]"
             >
               Cancelar
             </button>

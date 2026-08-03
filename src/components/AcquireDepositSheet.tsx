@@ -26,6 +26,9 @@ import type { DeviceVaultRecord, VaultAccount } from "@/lib/vault/types";
 const ACQUIRE_BALANCE_POLL_MS = 7_000;
 const RECEIPT_BALANCE_POLL_MS = 7_000;
 
+/** TEMP DEV: always show bank-account screen (pretend Mettal acquire balance is 0). */
+const DEV_TEST_FORCE_BANK_DEPOSIT_SCREEN = false; // import.meta.env.DEV;
+
 type AcquireSession = {
   credentials: MettalCredentials;
   accessToken: string;
@@ -148,7 +151,10 @@ export function AcquireDepositSheet({
         };
         onVaultUpdatedRef.current?.(unlocked.nextVault);
 
-        if (unlocked.balances.acquireBalance >= METTAL_MIN_ACQUIRE_MINOR) {
+        if (
+          !DEV_TEST_FORCE_BANK_DEPOSIT_SCREEN &&
+          unlocked.balances.acquireBalance >= METTAL_MIN_ACQUIRE_MINOR
+        ) {
           setStep({
             kind: "amount",
             acquireBalance: unlocked.balances.acquireBalance,
@@ -466,7 +472,7 @@ export function AcquireDepositSheet({
         {step.kind === "amount" ? (
           <>
             <p className="mt-4 text-sm leading-6 text-ink-muted">
-              Tienes saldo disponible en Mettal. ¿Cuánto quieres agregar a la
+              Tienes saldo disponible en Mettal.io. ¿Cuánto quieres agregar a la
               app?
             </p>
             <p className="mt-5 text-base text-ink-muted">
@@ -570,7 +576,7 @@ export function AcquireDepositSheet({
               <p className="text-xs font-medium tracking-wide text-ink-muted uppercase">
                 Cuenta bancaria {step.account.currency}
               </p>
-              <p className="mt-3 font-mono text-sm font-semibold tabular-nums tracking-tight text-ink whitespace-nowrap">
+              <p className="mt-3 font-mono text-lg font-semibold tabular-nums tracking-tight text-ink whitespace-nowrap">
                 {step.account.bankAccount}
               </p>
               <button
