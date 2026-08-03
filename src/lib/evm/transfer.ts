@@ -7,11 +7,11 @@ import {
   type Hash,
   type WalletClient,
 } from "viem";
-import { baseSepolia } from "viem/chains";
 import { withDeviceVaultSeed } from "@/lib/vault/ceremony";
 import { ensurePrimaryEvmAccount } from "@/lib/vault/evm";
 import type { DeviceVaultRecord } from "@/lib/vault/types";
 import {
+  EVM_CHAIN,
   FEE_CONTRACT_ADDRESS,
   PENMT_TOKEN_ADDRESS,
 } from "@/lib/evm/config";
@@ -145,7 +145,7 @@ async function cancelNonce(input: {
   const fees = await estimateSendFees(10_000n); // +100%
   const hash = await input.wallet.sendTransaction({
     account: input.account,
-    chain: baseSepolia,
+    chain: EVM_CHAIN,
     to: input.sender,
     value: 0n,
     nonce: input.nonce,
@@ -210,7 +210,7 @@ async function writeContractSequential(input: {
       functionName: input.request.functionName,
       args: input.request.args,
       account: input.account,
-      chain: baseSepolia,
+      chain: EVM_CHAIN,
       nonce,
       maxPriorityFeePerGas: fees.maxPriorityFeePerGas,
       maxFeePerGas: fees.maxFeePerGas,

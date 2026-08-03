@@ -5,8 +5,14 @@ import {
   http,
   type Account,
 } from "viem";
-import { baseSepolia } from "viem/chains";
-import { EVM_CHAIN_ID } from "@/lib/evm/config";
+import { EVM_CHAIN, EVM_CHAIN_ID } from "@/lib/evm/config";
+
+/** Ordered Base mainnet RPCs (no ranking — try in order). */
+const BASE_MAINNET_RPC_URLS = [
+  "https://mainnet.base.org",
+  "https://base.publicnode.com",
+  "https://base-rpc.publicnode.com",
+] as const;
 
 /** Ordered Base Sepolia RPCs (no ranking — try in order). */
 const BASE_SEPOLIA_RPC_URLS = [
@@ -15,15 +21,21 @@ const BASE_SEPOLIA_RPC_URLS = [
   "https://base-sepolia-rpc.publicnode.com",
 ] as const;
 
+const RPC_URLS = import.meta.env.DEV
+  ? BASE_SEPOLIA_RPC_URLS
+  : BASE_MAINNET_RPC_URLS;
+
 function assertConfiguredChain(): void {
-  if (EVM_CHAIN_ID !== baseSepolia.id) {
-    throw new Error("La cadena EVM configurada no coincide con Base Sepolia.");
+  if (EVM_CHAIN_ID !== EVM_CHAIN.id) {
+    throw new Error(
+      `La cadena EVM configurada (${EVM_CHAIN_ID}) no coincide con ${EVM_CHAIN.name}.`,
+    );
   }
 }
 
 /** Shared read transport — fallback across public RPCs. */
 const readTransport = fallback(
-  BASE_SEPOLIA_RPC_URLS.map((url) => http(url)),
+  RPC_URLS.map((url) => http(url)),
   { rank: false },
 );
 
@@ -32,16 +44,16 @@ const readTransport = fallback(
  * (approve → transfer → fee) don't split across endpoints with divergent
  * pending nonces / mempools.
  */
-const writeTransport = http(BASE_SEPOLIA_RPC_URLS[0]);
+const writeTransport = http(RPC_URLS[0]);
 
 const publicClient = createPublicClient({
-  chain: baseSepolia,
+  chain: EVM_CHAIN,
   transport: readTransport,
 });
 
 /** Same node as wallet sends — use for nonce + waitForTransactionReceipt. */
 const writePublicClient = createPublicClient({
-  chain: baseSepolia,
+  chain: EVM_CHAIN,
   transport: writeTransport,
 });
 
@@ -60,7 +72,7 @@ export function getWalletClient(account: Account) {
   assertConfiguredChain();
   return createWalletClient({
     account,
-    chain: baseSepolia,
+    chain: EVM_CHAIN,
     transport: writeTransport,
   });
 }
