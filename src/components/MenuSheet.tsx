@@ -159,6 +159,11 @@ export function MenuSheet({
                 Ten cuidado: cualquiera que tenga tu clave privada puede
                 acceder a los tokens.
               </p>
+              <p className="pt-2 font-mono text-xs text-ink-muted/80">
+                Build {__APP_COMMIT__}
+                <span className="mx-1.5 text-line">·</span>
+                {formatBuiltAt(__APP_BUILT_AT__)}
+              </p>
             </div>
             <button
               type="button"
@@ -180,6 +185,12 @@ export function MenuSheet({
       </div>
     </div>
   );
+}
+
+function formatBuiltAt(iso: string): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return iso;
+  return date.toISOString().replace("T", " ").replace(/\.\d{3}Z$/, " UTC");
 }
 
 function MenuItem({

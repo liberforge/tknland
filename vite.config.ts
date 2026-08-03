@@ -1,14 +1,35 @@
+import { execSync } from "node:child_process";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { VitePWA } from "vite-plugin-pwa";
 import { fileURLToPath, URL } from "node:url";
 
+function resolveAppCommit(): string {
+  const fromVercel = process.env.VERCEL_GIT_COMMIT_SHA?.trim();
+  if (fromVercel) return fromVercel.slice(0, 7);
+  try {
+    return execSync("git rev-parse --short HEAD", {
+      stdio: ["ignore", "pipe", "ignore"],
+    })
+      .toString()
+      .trim();
+  } catch {
+    return "unknown";
+  }
+}
+
 export default defineConfig(({ mode }) => {
   const isDev = mode === "development";
   const appName = isDev ? "DEV tkn.land" : "tkn.land";
+  const appCommit = resolveAppCommit();
+  const appBuiltAt = new Date().toISOString();
 
   return {
+    define: {
+      __APP_COMMIT__: JSON.stringify(appCommit),
+      __APP_BUILT_AT__: JSON.stringify(appBuiltAt),
+    },
     plugins: [
       react(),
       tailwindcss(),
