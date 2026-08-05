@@ -39,6 +39,9 @@ export type ReceiptLink = {
 
 export type HandshakeLink = InviteLink | PayLink | ReceiptLink;
 
+/** Minimum PENMT amount for sends / requests in the protocol UX. */
+export const MIN_PROTOCOL_AMOUNT_MAJOR = 5;
+
 /** Normalize a major-unit amount for protocol params (e.g. "12.5" → "12.50"). */
 export function normalizeProtocolAmount(raw: string): string | null {
   const normalized = raw.trim().replace(/\s/g, "").replace(",", ".");
@@ -48,6 +51,14 @@ export function normalizeProtocolAmount(raw: string): string | null {
   // Keep up to 2 display decimals for PENMT UX; strip trailing zeros beyond that.
   const fixed = major.toFixed(2);
   return fixed;
+}
+
+/** Error message if `amount` (normalized major string) is below the minimum. */
+export function minProtocolAmountError(amount: string): string | null {
+  if (Number(amount) < MIN_PROTOCOL_AMOUNT_MAJOR) {
+    return `El monto mínimo es ${MIN_PROTOCOL_AMOUNT_MAJOR} PENMT.`;
+  }
+  return null;
 }
 
 export function tokenSymbolToAddress(token: ProtocolToken): `0x${string}` {

@@ -4,6 +4,7 @@ import {
   buildPayLink,
   newHandshakeId,
   normalizeProtocolAmount,
+  minProtocolAmountError,
   PROTOCOL_TOKEN_PENMT,
 } from "@/lib/protocol/links";
 import { createPaymentIntent } from "@/lib/protocol/intents";
@@ -124,6 +125,11 @@ export function SendScreen({
       setAmountError("Ingresa un monto válido (ej. 10.00).");
       return;
     }
+    const minError = minProtocolAmountError(amount);
+    if (minError) {
+      setAmountError(minError);
+      return;
+    }
     setAmountError(null);
     setStep({ kind: "working", message: "Preparando envío…" });
 
@@ -171,6 +177,11 @@ export function SendScreen({
     const amount = normalizeProtocolAmount(amountInput);
     if (!amount) {
       setAmountError("Ingresa un monto válido (ej. 10.00).");
+      return;
+    }
+    const minError = minProtocolAmountError(amount);
+    if (minError) {
+      setAmountError(minError);
       return;
     }
     setAmountError(null);

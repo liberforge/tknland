@@ -150,14 +150,17 @@ export function BackupFlow({
           {question.prompt}
         </p>
         <div className="mt-5 space-y-3">
-          {question.options.map((option) => (
+          {question.options.map((option, index) => (
             <button
               key={option.id}
               type="button"
               onClick={() => handleAnswer(option.correct)}
-              className="w-full rounded-2xl border border-line bg-surface px-4 py-4 text-left text-sm leading-5 text-ink transition active:bg-line"
+              className="flex w-full gap-3 rounded-2xl border border-line bg-surface px-4 py-4 text-left text-sm leading-5 text-ink transition active:bg-line"
             >
-              {option.label}
+              <span className="shrink-0 font-semibold tabular-nums text-ink-muted">
+                {index + 1}.
+              </span>
+              <span>{option.label}</span>
             </button>
           ))}
         </div>

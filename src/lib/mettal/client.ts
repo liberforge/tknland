@@ -7,7 +7,7 @@ export const METTAL_DEFAULT_SYMBOL = "PENMT";
 export const METTAL_DEFAULT_COUNTRY = "PE";
 /** Mettal balances/amounts use minor units (centavos): 1.00 → 100. */
 export const METTAL_MINOR_UNIT_SCALE = 100;
-/** Minimum acquire balance (major units) before offering an on-app top-up. */
+/** Minimum acquire amount (major units / S/). */
 export const METTAL_MIN_ACQUIRE_MAJOR = 5;
 export const METTAL_MIN_ACQUIRE_MINOR =
   METTAL_MIN_ACQUIRE_MAJOR * METTAL_MINOR_UNIT_SCALE;

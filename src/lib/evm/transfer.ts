@@ -10,9 +10,10 @@ import {
 import { withDeviceVaultSeed } from "@/lib/vault/ceremony";
 import { ensurePrimaryEvmAccount } from "@/lib/vault/evm";
 import type { DeviceVaultRecord } from "@/lib/vault/types";
+import { minProtocolAmountError } from "@/lib/protocol/links";
 import {
   EVM_CHAIN,
-  FEE_CONTRACT_ADDRESS,
+  GAS_PACK_CONTRACT_ADDRESS,
   PENMT_TOKEN_ADDRESS,
 } from "@/lib/evm/config";
 import {
@@ -20,13 +21,18 @@ import {
   getWalletClient,
   getWritePublicClient,
 } from "@/lib/evm/client";
-import { feeContractAbi, getMinFeeAmount } from "@/lib/evm/fee";
+import { gasPackAbi, getPackPrice } from "@/lib/evm/gas-pack";
+import { HOP_SEED_TARGET, planSendGas } from "@/lib/evm/gas-virality";
 import { parsePenmtMajorToRaw } from "@/lib/evm/penmt";
 
 export type PenmtTransferResult = {
   transferTxHash: Hash;
   approveTxHash: Hash | null;
+  /** Gas-pack purchase tx, if one ran in this send. */
   feeTxHash: Hash | null;
+  /** ETH gift to receiver, if any. */
+  giftTxHash: Hash | null;
+  /** Pack price paid in PENMT (0 if no pack bought). */
   feeAmountRaw: bigint;
   feeAmountFormatted: string;
   principalRaw: bigint;
@@ -34,6 +40,17 @@ export type PenmtTransferResult = {
   receiver: Address;
   vault: DeviceVaultRecord;
 };
+
+export class GasPackRequiredError extends Error {
+  readonly code = "GAS_PACK_REQUIRED" as const;
+  constructor(
+    message: string,
+    readonly canSelfServe: boolean,
+  ) {
+    super(message);
+    this.name = "GasPackRequiredError";
+  }
+}
 
 /**
  * Soft floors near Base Sepolia realities (~0.001–0.01 gwei).
@@ -121,9 +138,10 @@ function mapSendError(err: unknown, walletAddress?: Address): Error {
   }
   if (/ERC20InsufficientAllowance|0xfb8f41b2/i.test(msg)) {
     return new Error(
-      "Falta autorización del token para la comisión. Inténtalo de nuevo.",
+      "Falta autorización del token para la recarga de red. Inténtalo de nuevo.",
     );
   }
+  if (err instanceof GasPackRequiredError) return err;
   return err instanceof Error ? err : new Error(msg);
 }
 
@@ -240,19 +258,61 @@ async function writeContractSequential(input: {
   }
 }
 
+async function sendEthSequential(input: {
+  wallet: WalletClient;
+  account: Account;
+  sender: Address;
+  nonce: number;
+  to: Address;
+  value: bigint;
+}): Promise<{ hash: Hash; nextNonce: number }> {
+  const sendOnce = async (nonce: number, bumpBps: bigint) => {
+    const fees = await estimateSendFees(bumpBps);
+    const hash = await input.wallet.sendTransaction({
+      account: input.account,
+      chain: EVM_CHAIN,
+      to: input.to,
+      value: input.value,
+      nonce,
+      maxPriorityFeePerGas: fees.maxPriorityFeePerGas,
+      maxFeePerGas: fees.maxFeePerGas,
+    });
+    await waitForReceipt(hash);
+    return hash;
+  };
+
+  try {
+    const hash = await sendOnce(input.nonce, 0n);
+    return { hash, nextNonce: input.nonce + 1 };
+  } catch (err) {
+    if (!isNonceConflict(err)) throw mapSendError(err, input.sender);
+    const nonce = await ensureClearNonce({
+      wallet: input.wallet,
+      account: input.account,
+      sender: input.sender,
+    });
+    try {
+      const hash = await sendOnce(nonce, 10_000n);
+      return { hash, nextNonce: nonce + 1 };
+    } catch (err2) {
+      throw mapSendError(err2, input.sender);
+    }
+  }
+}
+
 export type SendProgress =
   | "unlock"
   | "clearing"
   | "approve"
+  | "pack"
+  | "gift"
   | "transfer"
-  | "fee"
   | "done";
 
 /**
- * Biometric-gated PENMT transfer. When the sender can cover principal + min fee:
- * approve (if needed) → processFee (tops up ETH) → transfer.
- * Otherwise transfer only (fee 0, no top-up). Near-zero ETH still needs an
- * operator bootstrap (fee-contract CLI) outside this path.
+ * Biometric-gated PENMT transfer (gas virality protocol).
+ * Optional gas pack → optional ETH gift to receiver → PENMT transfer.
+ * No per-transfer FeeContract commission.
  */
 export async function sendPenmtWithFee(input: {
   vault: DeviceVaultRecord;
@@ -264,13 +324,17 @@ export async function sendPenmtWithFee(input: {
   const publicClient = getPublicClient();
   const principalRaw = await parsePenmtMajorToRaw(input.amount);
   if (principalRaw <= 0n) throw new Error("El monto debe ser mayor que cero.");
+  const minError = minProtocolAmountError(input.amount);
+  if (minError) throw new Error(minError);
 
-  const configuredFee = await getMinFeeAmount(PENMT_TOKEN_ADDRESS);
-  const decimals = await publicClient.readContract({
-    address: PENMT_TOKEN_ADDRESS,
-    abi: erc20Abi,
-    functionName: "decimals",
-  });
+  const [decimals, packPrice] = await Promise.all([
+    publicClient.readContract({
+      address: PENMT_TOKEN_ADDRESS,
+      abi: erc20Abi,
+      functionName: "decimals",
+    }),
+    getPackPrice(PENMT_TOKEN_ADDRESS),
+  ]);
 
   const report = (step: SendProgress) => {
     input.onProgress?.(step);
@@ -288,22 +352,41 @@ export async function sendPenmtWithFee(input: {
       senderForError = sender;
       const receiver = input.receiver;
 
-      const balance = await publicClient.readContract({
-        address: PENMT_TOKEN_ADDRESS,
-        abi: erc20Abi,
-        functionName: "balanceOf",
-        args: [sender],
-      });
+      const [penmtBalance, senderEth, receiverEth] = await Promise.all([
+        publicClient.readContract({
+          address: PENMT_TOKEN_ADDRESS,
+          abi: erc20Abi,
+          functionName: "balanceOf",
+          args: [sender],
+        }),
+        publicClient.getBalance({ address: sender }),
+        publicClient.getBalance({ address: receiver }),
+      ]);
 
-      if (balance < principalRaw) {
+      if (penmtBalance < principalRaw) {
         throw new Error(
           `Saldo insuficiente. Necesitas ${formatUnits(principalRaw, decimals)} PENMT.`,
         );
       }
 
-      const chargeFee =
-        configuredFee > 0n && balance >= principalRaw + configuredFee;
-      const feeAmountRaw = chargeFee ? configuredFee : 0n;
+      let plan = planSendGas({ senderEth, receiverEth });
+      let packAmountRaw = 0n;
+
+      if (plan.needsPack) {
+        if (!plan.canSelfServePack) {
+          throw new GasPackRequiredError(
+            "Necesitas una recarga de red para continuar.",
+            false,
+          );
+        }
+        if (penmtBalance < principalRaw + packPrice) {
+          throw new GasPackRequiredError(
+            `Para enviarle saldo de red a esta persona, primero haz una recarga de red. Necesitas ${formatUnits(packPrice, decimals)} PENMT extra.`,
+            true,
+          );
+        }
+        packAmountRaw = packPrice;
+      }
 
       const wallet = getWalletClient(signer);
       let nonce = await ensureClearNonce({
@@ -315,25 +398,23 @@ export async function sendPenmtWithFee(input: {
 
       let approveTxHash: Hash | null = null;
       let feeTxHash: Hash | null = null;
+      let giftTxHash: Hash | null = null;
 
-      // Fee + ETH top-up first so transfer has gas.
-      if (feeAmountRaw > 0n) {
+      if (packAmountRaw > 0n) {
         const writePublic = getWritePublicClient();
         const readAllowance = () =>
           writePublic.readContract({
             address: PENMT_TOKEN_ADDRESS,
             abi: erc20Abi,
             functionName: "allowance",
-            args: [sender, FEE_CONTRACT_ADDRESS],
+            args: [sender, GAS_PACK_CONTRACT_ADDRESS],
           });
 
-        const ensureFeeApproval = async () => {
+        const ensurePackApproval = async () => {
           const allowance = await readAllowance();
-          // transfer() does not use allowance — only processFee pulls `feeAmountRaw`.
-          if (allowance >= feeAmountRaw) return;
+          if (allowance >= packAmountRaw) return;
 
           report("approve");
-          // Some ERC-20s require clearing a non-zero allowance before raising it.
           if (allowance > 0n) {
             const cleared = await writeContractSequential({
               wallet,
@@ -344,7 +425,7 @@ export async function sendPenmtWithFee(input: {
                 address: PENMT_TOKEN_ADDRESS,
                 abi: erc20Abi,
                 functionName: "approve",
-                args: [FEE_CONTRACT_ADDRESS, 0n],
+                args: [GAS_PACK_CONTRACT_ADDRESS, 0n],
               },
             });
             approveTxHash = cleared.hash;
@@ -359,42 +440,37 @@ export async function sendPenmtWithFee(input: {
               address: PENMT_TOKEN_ADDRESS,
               abi: erc20Abi,
               functionName: "approve",
-              args: [FEE_CONTRACT_ADDRESS, maxUint256],
+              args: [GAS_PACK_CONTRACT_ADDRESS, maxUint256],
             },
           });
           approveTxHash = approved.hash;
           nonce = approved.nextNonce;
         };
 
-        await ensureFeeApproval();
+        await ensurePackApproval();
 
-        report("fee");
+        report("pack");
         try {
-          const feePaid = await writeContractSequential({
+          const bought = await writeContractSequential({
             wallet,
             account: signer,
             sender,
             nonce,
             request: {
-              address: FEE_CONTRACT_ADDRESS,
-              abi: feeContractAbi,
-              functionName: "processFee",
-              args: [
-                PENMT_TOKEN_ADDRESS,
-                feeAmountRaw,
-                sender,
-                sender,
-                receiver,
-              ],
+              address: GAS_PACK_CONTRACT_ADDRESS,
+              abi: gasPackAbi,
+              functionName: "buyGasPack",
+              args: [PENMT_TOKEN_ADDRESS, packAmountRaw],
             },
           });
-          feeTxHash = feePaid.hash;
-          nonce = feePaid.nextNonce;
+          feeTxHash = bought.hash;
+          nonce = bought.nextNonce;
         } catch (err) {
-          // Stale allowance read — force approve max and retry processFee once.
-          if (!/ERC20InsufficientAllowance|0xfb8f41b2|autorización del token/i.test(
-            err instanceof Error ? err.message : String(err),
-          )) {
+          if (
+            !/ERC20InsufficientAllowance|0xfb8f41b2|autorización del token/i.test(
+              err instanceof Error ? err.message : String(err),
+            )
+          ) {
             throw err;
           }
           report("approve");
@@ -409,7 +485,7 @@ export async function sendPenmtWithFee(input: {
                 address: PENMT_TOKEN_ADDRESS,
                 abi: erc20Abi,
                 functionName: "approve",
-                args: [FEE_CONTRACT_ADDRESS, 0n],
+                args: [GAS_PACK_CONTRACT_ADDRESS, 0n],
               },
             });
             nonce = cleared.nextNonce;
@@ -424,33 +500,51 @@ export async function sendPenmtWithFee(input: {
                 address: PENMT_TOKEN_ADDRESS,
                 abi: erc20Abi,
                 functionName: "approve",
-                args: [FEE_CONTRACT_ADDRESS, maxUint256],
+                args: [GAS_PACK_CONTRACT_ADDRESS, maxUint256],
               },
             });
             approveTxHash = approved.hash;
             nonce = approved.nextNonce;
           }
-          const feePaid = await writeContractSequential({
+          const bought = await writeContractSequential({
             wallet,
             account: signer,
             sender,
             nonce,
             request: {
-              address: FEE_CONTRACT_ADDRESS,
-              abi: feeContractAbi,
-              functionName: "processFee",
-              args: [
-                PENMT_TOKEN_ADDRESS,
-                feeAmountRaw,
-                sender,
-                sender,
-                receiver,
-              ],
+              address: GAS_PACK_CONTRACT_ADDRESS,
+              abi: gasPackAbi,
+              functionName: "buyGasPack",
+              args: [PENMT_TOKEN_ADDRESS, packAmountRaw],
             },
           });
-          feeTxHash = feePaid.hash;
-          nonce = feePaid.nextNonce;
+          feeTxHash = bought.hash;
+          nonce = bought.nextNonce;
         }
+
+        // Re-plan after pack (sender should be near packTopUpTarget).
+        const [senderEthAfter, receiverEthAfter] = await Promise.all([
+          publicClient.getBalance({ address: sender }),
+          publicClient.getBalance({ address: receiver }),
+        ]);
+        plan = planSendGas({
+          senderEth: senderEthAfter,
+          receiverEth: receiverEthAfter,
+        });
+      }
+
+      if (plan.receiverGift.kind === "top_up" && plan.receiverGift.gift > 0n) {
+        report("gift");
+        const gifted = await sendEthSequential({
+          wallet,
+          account: signer,
+          sender,
+          nonce,
+          to: receiver,
+          value: plan.receiverGift.gift,
+        });
+        giftTxHash = gifted.hash;
+        nonce = gifted.nextNonce;
       }
 
       report("transfer");
@@ -472,8 +566,9 @@ export async function sendPenmtWithFee(input: {
         transferTxHash: transferred.hash,
         approveTxHash,
         feeTxHash,
-        feeAmountRaw,
-        feeAmountFormatted: formatFeeMajor(feeAmountRaw, decimals),
+        giftTxHash,
+        feeAmountRaw: packAmountRaw,
+        feeAmountFormatted: formatFeeMajor(packAmountRaw, decimals),
         principalRaw,
         sender,
         receiver,
@@ -485,45 +580,78 @@ export async function sendPenmtWithFee(input: {
   }
 }
 
-/** Preview the fee that would actually be charged for this send. */
+/** Preview gas/pack requirements for a send (no per-transfer commission). */
 export async function getPenmtFeePreview(input: {
   sender: Address;
+  receiver?: Address;
   /** Major-unit amount string, e.g. "10.00". */
   amount: string;
 }): Promise<{
   feeAmountRaw: bigint;
   feeAmountFormatted: string;
   skipped: boolean;
+  needsPack: boolean;
+  canSelfServePack: boolean;
+  canAfford: boolean;
+  gasNote: string;
+  packCostFormatted: string | null;
+  totalCostFormatted: string | null;
 }> {
   const publicClient = getPublicClient();
   const principalRaw = await parsePenmtMajorToRaw(input.amount);
-  const [configuredFee, decimals, balance] = await Promise.all([
-    getMinFeeAmount(PENMT_TOKEN_ADDRESS),
-    publicClient.readContract({
-      address: PENMT_TOKEN_ADDRESS,
-      abi: erc20Abi,
-      functionName: "decimals",
-    }),
-    publicClient.readContract({
-      address: PENMT_TOKEN_ADDRESS,
-      abi: erc20Abi,
-      functionName: "balanceOf",
-      args: [input.sender],
-    }),
-  ]);
+  const [decimals, packPrice, penmtBalance, senderEth, receiverEth] =
+    await Promise.all([
+      publicClient.readContract({
+        address: PENMT_TOKEN_ADDRESS,
+        abi: erc20Abi,
+        functionName: "decimals",
+      }),
+      getPackPrice(PENMT_TOKEN_ADDRESS),
+      publicClient.readContract({
+        address: PENMT_TOKEN_ADDRESS,
+        abi: erc20Abi,
+        functionName: "balanceOf",
+        args: [input.sender],
+      }),
+      publicClient.getBalance({ address: input.sender }),
+      input.receiver
+        ? publicClient.getBalance({ address: input.receiver })
+        : Promise.resolve(HOP_SEED_TARGET),
+    ]);
 
-  const chargeFee =
-    configuredFee > 0n && balance >= principalRaw + configuredFee;
-  const feeAmountRaw = chargeFee ? configuredFee : 0n;
+  const plan = planSendGas({ senderEth, receiverEth });
+  const needsPack = plan.needsPack;
+  const requiredRaw = needsPack ? principalRaw + packPrice : principalRaw;
+  const canAfford = penmtBalance >= requiredRaw;
+  const packAmountRaw = needsPack && canAfford ? packPrice : 0n;
+
+  let gasNote = "Envío sin comisión de red.";
+  let packCostFormatted: string | null = null;
+  let totalCostFormatted: string | null = null;
+  if (needsPack && !plan.canSelfServePack) {
+    gasNote = "Necesitas una recarga de red para continuar.";
+  } else if (needsPack) {
+    packCostFormatted = formatFeeMajor(packPrice, decimals);
+    totalCostFormatted = formatFeeMajor(principalRaw + packPrice, decimals);
+    gasNote = `Para poder hacer este envío se hará primero una recarga de red de costo ${packCostFormatted} PENMT. Costo total del envío ${totalCostFormatted} PENMT.`;
+  } else if (plan.receiverGift.kind === "top_up") {
+    gasNote = "Sin comisión. Se enviará un poco de saldo de red al destinatario.";
+  }
 
   return {
-    feeAmountRaw,
-    feeAmountFormatted: formatFeeMajor(feeAmountRaw, decimals),
-    skipped: !chargeFee && configuredFee > 0n,
+    feeAmountRaw: packAmountRaw,
+    feeAmountFormatted: formatFeeMajor(packAmountRaw, decimals),
+    skipped: needsPack && packAmountRaw === 0n,
+    needsPack,
+    canSelfServePack: plan.canSelfServePack,
+    canAfford,
+    gasNote,
+    packCostFormatted,
+    totalCostFormatted,
   };
 }
 
-/** Show enough decimals for tiny on-chain fees (avoid "0.00" for 0.00001). */
+/** Show enough decimals for tiny on-chain amounts (avoid "0.00" for 0.00001). */
 function formatFeeMajor(raw: bigint, decimals: number): string {
   if (raw === 0n) return "0";
   const major = formatUnits(raw, decimals);
@@ -532,7 +660,7 @@ function formatFeeMajor(raw: bigint, decimals: number): string {
   const places = Math.min(decimals, 6);
   const fixed = asNumber.toFixed(places);
   if (asNumber >= 0.01) {
-    return asNumber.toFixed(2);
+    return asNumber.toFixed(2).replace(/\.00$/, "");
   }
   return fixed.replace(/\.?0+$/, "") || "0";
 }

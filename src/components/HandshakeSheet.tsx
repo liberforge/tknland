@@ -4,6 +4,7 @@ import {
   buildPayLink,
   buildReceiptLink,
   normalizeProtocolAmount,
+  minProtocolAmountError,
   type HandshakeLink,
   type PayLink,
 } from "@/lib/protocol/links";
@@ -24,6 +25,7 @@ import {
   getPrimaryAddress,
 } from "@/lib/vault/evm";
 import type { DeviceVaultRecord } from "@/lib/vault/types";
+import { DestinationAccount } from "@/components/DestinationAccount";
 
 type HandshakeSheetProps = {
   open: boolean;
@@ -60,6 +62,11 @@ type Step =
       kind: "confirm";
       pay: ResolvedPayLink;
       feeFormatted: string | null;
+      gasNote: string | null;
+      packCostFormatted: string | null;
+      totalCostFormatted: string | null;
+      needsPack: boolean;
+      canAfford: boolean;
       matchedIntent: boolean;
     }
   | { kind: "already-paid"; amount: string; txHash?: Hash }
@@ -146,6 +153,12 @@ export function HandshakeSheet({
     cancelled: boolean,
     apply: (step: Step) => void,
   ): Promise<void> {
+    const minError = minProtocolAmountError(amount);
+    if (minError) {
+      apply({ kind: "error", message: minError });
+      return;
+    }
+
     apply({ kind: "working", message: "Verificando enlace…" });
     try {
       const match = await matchPayReply({
@@ -178,15 +191,31 @@ export function HandshakeSheet({
       }
 
       let feeFormatted: string | null = null;
+      let gasNote: string | null = null;
+      let packCostFormatted: string | null = null;
+      let totalCostFormatted: string | null = null;
+      let needsPack = false;
+      let canAfford = true;
       if (senderAddress) {
         try {
           const fee = await getPenmtFeePreview({
             sender: senderAddress,
+            receiver: pay.addr,
             amount,
           });
-          feeFormatted = fee.feeAmountFormatted;
+          feeFormatted = fee.needsPack ? fee.feeAmountFormatted : "0";
+          gasNote = fee.gasNote;
+          packCostFormatted = fee.packCostFormatted;
+          totalCostFormatted = fee.totalCostFormatted;
+          needsPack = fee.needsPack;
+          canAfford = fee.canAfford;
         } catch {
           feeFormatted = null;
+          gasNote = null;
+          packCostFormatted = null;
+          totalCostFormatted = null;
+          needsPack = false;
+          canAfford = true;
         }
       }
 
@@ -196,6 +225,11 @@ export function HandshakeSheet({
         kind: "confirm",
         pay: { ...pay, amount },
         feeFormatted,
+        gasNote,
+        packCostFormatted,
+        totalCostFormatted,
+        needsPack,
+        canAfford,
         matchedIntent: match.kind === "match",
       });
     } catch (err) {
@@ -297,6 +331,14 @@ export function HandshakeSheet({
       });
       return;
     }
+    const minError = minProtocolAmountError(amount);
+    if (minError) {
+      setStep({
+        ...step,
+        amountError: minError,
+      });
+      return;
+    }
     await prepareConfirm(step.pay, amount, false, setStep);
   }
 
@@ -319,9 +361,11 @@ export function HandshakeSheet({
         case "clearing":
           return "Liberando una transacción trabada en la red…";
         case "approve":
-          return "Autorizando comisión en la red…";
-        case "fee":
-          return "Comisión y recarga de ETH…";
+          return "Autorizando recarga de red…";
+        case "pack":
+          return "Comprando recarga de red…";
+        case "gift":
+          return "Enviando saldo de red al destinatario…";
         case "transfer":
           return "Enviando PENMT… esperando confirmación";
         case "done":
@@ -505,9 +549,7 @@ export function HandshakeSheet({
             <p className="mt-4 text-sm leading-6 text-ink-muted">
               Escaneaste una cuenta TKN. Indica cuánto quieres enviar.
             </p>
-            <p className="mt-4 break-all rounded-2xl border border-line bg-surface-raised p-3 font-mono text-xs text-ink-muted">
-              {step.pay.addr}
-            </p>
+            <DestinationAccount className="mt-4" address={step.pay.addr} />
             <div className="mt-6">
               <span className="text-sm font-medium text-ink">Monto a enviar</span>
               <div className="mt-2 flex max-w-[13.5rem] items-center gap-2">
@@ -562,27 +604,31 @@ export function HandshakeSheet({
                 ? "Confirma el envío a la cuenta TKN."
                 : "Te piden este monto. Confirma para enviarlo."}
             </p>
-            <p className="mt-4 break-all rounded-2xl border border-line bg-surface-raised p-3 font-mono text-xs text-ink-muted">
-              {step.pay.addr}
-            </p>
+            <DestinationAccount className="mt-4" address={step.pay.addr} />
             <p className="mt-6 text-4xl font-semibold tabular-nums tracking-tight text-ink">
               {step.pay.amount}{" "}
               <span className="text-base font-medium text-accent-soft">
                 PENMT
               </span>
             </p>
-            {step.feeFormatted != null ? (
+            {step.packCostFormatted != null &&
+            step.totalCostFormatted != null ? (
               <p className="mt-2 text-sm text-ink-muted">
-                {step.feeFormatted === "0"
-                  ? "Sin comisión de red (saldo justo para el envío)."
-                  : `Comisión de red: ${step.feeFormatted} PENMT`}
+                Para poder hacer este envío se hará primero una recarga de red de
+                costo {step.packCostFormatted} PENMT. Costo total del envío{" "}
+                <span className="font-semibold text-ink tabular-nums">
+                  {step.totalCostFormatted} PENMT
+                </span>
+                .
               </p>
-            ) : (
-              <p className="mt-2 text-sm text-ink-muted">
-                Si hay saldo suficiente, se cobrará una pequeña comisión de red
-                en PENMT.
+            ) : step.needsPack && step.gasNote != null ? (
+              <p className="mt-2 text-sm text-ink-muted">{step.gasNote}</p>
+            ) : null}
+            {!step.canAfford ? (
+              <p className="mt-2 text-sm font-semibold text-ink">
+                No tienes saldo suficiente.
               </p>
-            )}
+            ) : null}
             {!vault ? (
               <p className="mt-4 text-sm text-ink-muted">
                 Necesitas una billetera para enviar. Cierra y crea una primero.
@@ -591,7 +637,7 @@ export function HandshakeSheet({
             <div className="mt-8 flex gap-3">
               <button
                 type="button"
-                disabled={!vault}
+                disabled={!vault || !step.canAfford}
                 onClick={() => void handleConfirmPay()}
                 className="min-h-14 min-w-0 flex-[2] rounded-2xl bg-accent px-4 py-3 font-semibold text-surface transition active:scale-[0.99] disabled:opacity-50"
               >

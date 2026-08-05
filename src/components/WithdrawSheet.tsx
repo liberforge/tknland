@@ -81,6 +81,7 @@ type SheetStep =
       selectedId: string;
       onChainFormatted: string;
       feeFormatted: string | null;
+      gasNote: string | null;
     }
   | {
       kind: "amount-mettal";
@@ -108,9 +109,11 @@ function progressMessage(step: SendProgress): string {
     case "clearing":
       return "Preparando la red…";
     case "approve":
-      return "Autorizando comisión…";
-    case "fee":
-      return "Cargando ETH de gas…";
+      return "Autorizando recarga de red…";
+    case "pack":
+      return "Comprando recarga de red…";
+    case "gift":
+      return "Enviando saldo de red al destinatario…";
     case "transfer":
       return "Enviando PENMT…";
     case "done":
@@ -493,7 +496,7 @@ export function WithdrawSheet({
       return;
     }
 
-    setStep({ kind: "working", message: "Calculando comisión…" });
+    setStep({ kind: "working", message: "Revisando gas de red…" });
     void (async () => {
       try {
         const fee = await getPenmtFeePreview({
@@ -505,7 +508,8 @@ export function WithdrawSheet({
           banks: input.banks,
           selectedId: input.selectedId,
           onChainFormatted: input.onChainFormatted,
-          feeFormatted: fee.skipped ? null : fee.feeAmountFormatted,
+          feeFormatted: fee.needsPack ? fee.feeAmountFormatted : null,
+          gasNote: fee.gasNote,
         });
       } catch {
         setStep({
@@ -514,6 +518,7 @@ export function WithdrawSheet({
           selectedId: input.selectedId,
           onChainFormatted: input.onChainFormatted,
           feeFormatted: null,
+          gasNote: null,
         });
       }
     })();
@@ -1137,9 +1142,11 @@ export function WithdrawSheet({
               </span>{" "}
               PENMT
             </p>
-            {step.feeFormatted ? (
+            {step.gasNote ? (
+              <p className="mt-2 text-sm text-ink-muted">{step.gasNote}</p>
+            ) : step.feeFormatted ? (
               <p className="mt-2 text-sm text-ink-muted">
-                Comisión de red ≈ {step.feeFormatted} PENMT
+                Recarga de red ≈ {step.feeFormatted} PENMT
               </p>
             ) : null}
             <div className="mt-6">

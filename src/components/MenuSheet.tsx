@@ -1,5 +1,15 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
+import type { Address } from "viem";
 import { BackupFlow } from "./BackupFlow";
+import { HighlightedAddress } from "./DestinationAccount";
+import { getPublicClient } from "@/lib/evm/client";
+import { estimateNetworkCredit } from "@/lib/evm/gas-virality";
+import { withDeviceVaultSeed } from "@/lib/vault/ceremony";
+import {
+  ensurePrimaryEvmAccount,
+  getPrimaryAddress,
+} from "@/lib/vault/evm";
+import type { DeviceVaultRecord } from "@/lib/vault/types";
 
 type MenuSheetProps = {
   open: boolean;
@@ -9,11 +19,25 @@ type MenuSheetProps = {
   unlockHint?: string | null;
   backupCompleted?: boolean;
   mockBiometrics?: boolean;
+  vault: DeviceVaultRecord;
+  onVaultUpdated?: (vault: DeviceVaultRecord) => void;
   onRevealSeed: () => Promise<string>;
   onBackupCompleted?: () => Promise<void>;
 };
 
-type MenuView = "menu" | "about" | "backup";
+type MenuView = "menu" | "about" | "backup" | "network";
+
+type NetworkStatus =
+  | { kind: "idle" }
+  | { kind: "unlocking" }
+  | { kind: "loading" }
+  | {
+      kind: "ready";
+      penmtFormatted: string;
+      approxSends: number;
+      needsPackSoon: boolean;
+    }
+  | { kind: "error"; message: string };
 
 export function MenuSheet({
   open,
@@ -23,12 +47,20 @@ export function MenuSheet({
   unlockHint,
   backupCompleted = false,
   mockBiometrics = false,
+  vault,
+  onVaultUpdated,
   onRevealSeed,
   onBackupCompleted,
 }: MenuSheetProps) {
   const [mounted, setMounted] = useState(open);
   const [visible, setVisible] = useState(false);
   const [view, setView] = useState<MenuView>("menu");
+  const [network, setNetwork] = useState<NetworkStatus>({ kind: "idle" });
+  const [resolvedAddress, setResolvedAddress] = useState<Address | null>(
+    () => getPrimaryAddress(vault),
+  );
+
+  const [copiedAccount, setCopiedAccount] = useState(false);
 
   useEffect(() => {
     let frame = 0;
@@ -38,6 +70,9 @@ export function MenuSheet({
     if (open) {
       setMounted(true);
       setView("menu");
+      setNetwork({ kind: "idle" });
+      setResolvedAddress(getPrimaryAddress(vault));
+      setCopiedAccount(false);
       // Wait until the hidden panel has been painted before transitioning it in.
       frame = requestAnimationFrame(() => {
         secondFrame = requestAnimationFrame(() => setVisible(true));
@@ -52,16 +87,106 @@ export function MenuSheet({
       cancelAnimationFrame(secondFrame);
       clearTimeout(timer);
     };
+    // Only re-run on open/close — vault updates must not reset the sheet.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- vault read only when opening
   }, [open]);
 
+  useEffect(() => {
+    if (!open || view !== "network") return;
+
+    let cancelled = false;
+    setNetwork({ kind: "loading" });
+
+    void (async () => {
+      try {
+        let address = resolvedAddress ?? getPrimaryAddress(vault);
+
+        if (!address) {
+          setNetwork({ kind: "unlocking" });
+          const resolved = await withDeviceVaultSeed(vault, async (mnemonic) => {
+            const { vault: updated, account } = await ensurePrimaryEvmAccount(
+              vault,
+              mnemonic,
+            );
+            onVaultUpdated?.(updated);
+            return account.address as Address;
+          });
+          if (cancelled) return;
+          address = resolved;
+          setResolvedAddress(address);
+        }
+
+        setNetwork({ kind: "loading" });
+        const ethWei = await getPublicClient().getBalance({ address });
+        if (cancelled) return;
+        setNetwork({ kind: "ready", ...estimateNetworkCredit(ethWei) });
+      } catch (err) {
+        if (cancelled) return;
+        setNetwork({
+          kind: "error",
+          message:
+            err instanceof Error
+              ? err.message
+              : "No se pudo consultar el saldo de red.",
+        });
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+    // onVaultUpdated is intentionally omitted (inline from parent).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, view, vault, resolvedAddress]);
+
   if (!mounted) return null;
+
+  const displayAddress =
+    resolvedAddress ?? getPrimaryAddress(vault);
+
+  async function handleRevealAccount() {
+    let address = displayAddress;
+    if (!address) {
+      try {
+        address = await withDeviceVaultSeed(vault, async (mnemonic) => {
+          const { vault: updated, account } = await ensurePrimaryEvmAccount(
+            vault,
+            mnemonic,
+          );
+          onVaultUpdated?.(updated);
+          return account.address as Address;
+        });
+        setResolvedAddress(address);
+      } catch {
+        return;
+      }
+    }
+    try {
+      await navigator.clipboard.writeText(address);
+      setCopiedAccount(true);
+      window.setTimeout(() => setCopiedAccount(false), 1500);
+    } catch {
+      // Clipboard may be unavailable; address is still visible in the menu.
+    }
+  }
 
   const title =
     view === "about"
       ? "Acerca de"
       : view === "backup"
         ? "Copia de seguridad"
-        : "Menú";
+        : view === "network"
+          ? "Recarga de Red"
+          : "Menú";
+
+  const networkStatusMessage =
+    network.kind === "unlocking"
+      ? mockBiometrics
+        ? "Desbloqueando billetera…"
+        : "Confirma tu biometría para ver el saldo…"
+      : network.kind === "loading" || network.kind === "idle"
+        ? "Consultando saldo…"
+        : null;
 
   return (
     <div className="fixed inset-0 z-50 flex justify-center">
@@ -87,6 +212,24 @@ export function MenuSheet({
             <p className="text-xl font-semibold text-ink">Menú</p>
             <ul className="mt-4 divide-y divide-line">
               <MenuItem
+                label="Tu cuenta TKN"
+                hint={
+                  displayAddress ? (
+                    <span className="break-all font-mono text-xs">
+                      <HighlightedAddress address={displayAddress} />
+                      {copiedAccount ? (
+                        <span className="mt-1 block text-accent">
+                          Copiado al portapapeles
+                        </span>
+                      ) : null}
+                    </span>
+                  ) : (
+                    "Toca para revelar y copiar"
+                  )
+                }
+                onClick={() => void handleRevealAccount()}
+              />
+              <MenuItem
                 label="Copia de seguridad"
                 hint={
                   backupCompleted
@@ -94,6 +237,16 @@ export function MenuSheet({
                     : "Respalda tu frase secreta"
                 }
                 onClick={() => setView("backup")}
+              />
+              <MenuItem
+                label="Recarga de Red"
+                hint="Saldo de red y envíos"
+                onClick={() => setView("network")}
+              />
+              <MenuItem
+                label="Acerca de"
+                hint="Billetera tkn.land"
+                onClick={() => setView("about")}
               />
               {onTestUnlock ? (
                 <MenuItem
@@ -109,11 +262,6 @@ export function MenuSheet({
                   onClick={onDisconnectMettal}
                 />
               ) : null}
-              <MenuItem
-                label="Acerca de"
-                hint="Billetera tkn.land"
-                onClick={() => setView("about")}
-              />
             </ul>
             <button
               type="button"
@@ -124,10 +272,57 @@ export function MenuSheet({
             </button>
           </>
         ) : null}
+        {view === "network" ? (
+          <>
+            <p className="text-xl font-semibold text-ink">Recarga de Red</p>
+            <div className="mt-6 space-y-6 pb-10">
+              {networkStatusMessage ? (
+                <p className="text-sm text-ink-muted">{networkStatusMessage}</p>
+              ) : network.kind === "error" ? (
+                <p className="text-sm text-ink-muted">{network.message}</p>
+              ) : network.kind === "ready" ? (
+                <>
+                  <div className="text-center">
+                    <p className="text-[0.7rem] font-medium tracking-[0.22em] text-accent uppercase">
+                      Saldo de red
+                    </p>
+                    <p className="mt-3 flex items-baseline justify-center gap-2 tabular-nums">
+                      <span className="text-5xl font-semibold tracking-tight text-ink">
+                        {network.penmtFormatted}
+                      </span>
+                      <span className="text-sm font-medium text-accent-soft">
+                        PENMT
+                      </span>
+                    </p>
+                    <p className="mt-3 text-sm text-ink-muted">
+                      {network.needsPackSoon
+                        ? "Sin envíos disponibles · la próxima recarga es automática"
+                        : `Quedan ≈ ${network.approxSends} envío${network.approxSends === 1 ? "" : "s"}`}
+                    </p>
+                  </div>
+                  <div className="space-y-3 text-sm leading-6 text-ink-muted">
+                    <p>
+                      Cuando se acaba el saldo de
+                      red, la recarga es automática y cuesta{" "}
+                      <span className="font-semibold text-ink">1 PENMT</span>.
+                    </p>
+                  </div>
+                </>
+              ) : null}
+            </div>
+            <button
+              type="button"
+              onClick={() => setView("menu")}
+              className="mt-auto w-full rounded-xl border border-line bg-surface py-3 text-ink transition active:bg-line"
+            >
+              Volver
+            </button>
+          </>
+        ) : null}
         {view === "about" ? (
           <>
             <p className="text-xl font-semibold text-ink">Acerca de</p>
-            <div className="mt-4 space-y-4 pb-10 text-sm leading-6 text-ink-muted">
+            <div className="mt-4 space-y-4 text-sm leading-6 text-ink-muted">
               <p>
                 tkn.land es una billetera de{" "}
                 <span className="font-semibold text-ink">autocustodia</span>
@@ -159,7 +354,7 @@ export function MenuSheet({
                 Ten cuidado: cualquiera que tenga tu clave privada puede
                 acceder a los tokens.
               </p>
-              <p className="pt-2 font-mono text-xs text-ink-muted/80">
+              <p className="pt-[40px] text-right font-mono text-[0.65rem] text-ink-muted/80">
                 Build {__APP_COMMIT__}
                 <span className="mx-1.5 text-line">·</span>
                 {formatBuiltAt(__APP_BUILT_AT__)}
@@ -199,13 +394,13 @@ function MenuItem({
   onClick,
 }: {
   label: string;
-  hint: string;
+  hint: ReactNode;
   onClick?: () => void;
 }) {
   const content = (
     <>
       <p className="text-ink">{label}</p>
-      <p className="text-sm text-ink-muted">{hint}</p>
+      <div className="text-sm text-ink-muted">{hint}</div>
     </>
   );
 

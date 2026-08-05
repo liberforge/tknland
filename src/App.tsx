@@ -19,6 +19,7 @@ import {
 import { getActiveDeviceVault } from "./lib/vault/db";
 import { createInitialDeviceVault, markBackupCompleted, verifyVaultUnlock, withDeviceVaultSeed } from "./lib/vault/ceremony";
 import type { DeviceVaultRecord } from "./lib/vault/types";
+import { getPrimaryAddress } from "./lib/vault/evm";
 import {
   disconnectMettal,
   storeMettalCredentials,
@@ -29,7 +30,6 @@ import {
   parseHandshakeLink,
   type HandshakeLink,
 } from "./lib/protocol/links";
-import { getPrimaryAddress } from "./lib/vault/evm";
 import { getPenmtBalance } from "./lib/evm/penmt";
 
 type BootState =
@@ -58,19 +58,34 @@ export default function App() {
   const mettalConnected =
     boot.status === "ready" && Boolean(boot.vault.mettalCredentials);
 
-  const refreshBalance = useCallback(async (vault: DeviceVaultRecord) => {
-    const address = getPrimaryAddress(vault);
-    if (!address) {
-      setHomeBalance("0.00");
-      return;
-    }
-    try {
-      const { formatted } = await getPenmtBalance(address);
-      setHomeBalance(formatted);
-    } catch {
-      // Keep last known balance on RPC blips; if still unknown, leave blank.
-    }
-  }, []);
+  const refreshBalance = useCallback(
+    async (
+      vault: DeviceVaultRecord,
+      options?: { invalidate?: boolean; retries?: number },
+    ) => {
+      const address = getPrimaryAddress(vault);
+      if (!address) {
+        setHomeBalance("0.00");
+        return;
+      }
+      if (options?.invalidate) setHomeBalance(null);
+
+      const attempts = Math.max(1, options?.retries ?? 1);
+      for (let i = 0; i < attempts; i++) {
+        try {
+          const { formatted } = await getPenmtBalance(address);
+          setHomeBalance(formatted);
+          return;
+        } catch {
+          if (i < attempts - 1) {
+            await new Promise((resolve) => setTimeout(resolve, 600));
+          }
+          // Keep last known balance on RPC blips; if invalidated, leave blank.
+        }
+      }
+    },
+    [],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -114,6 +129,17 @@ export default function App() {
       cancelled = true;
     };
   }, [refreshBalance]);
+
+  useEffect(() => {
+    if (boot.status !== "ready") return;
+
+    const vault = boot.vault;
+    const id = window.setInterval(() => {
+      void refreshBalance(vault);
+    }, 30_000);
+
+    return () => window.clearInterval(id);
+  }, [boot, refreshBalance]);
 
   useEffect(() => {
     function consumeHash() {
@@ -346,6 +372,11 @@ export default function App() {
           unlockHint={unlockHint}
           backupCompleted={boot.vault.backupCompleted}
           mockBiometrics={mockBiometrics}
+          vault={boot.vault}
+          onVaultUpdated={(updated) => {
+            setBoot({ status: "ready", vault: updated });
+            void refreshBalance(updated);
+          }}
           onRevealSeed={handleRevealSeed}
           onBackupCompleted={handleBackupCompleted}
         />
@@ -392,14 +423,25 @@ export default function App() {
         link={handshakeLink}
         vault={readyVault}
         mockBiometrics={mockBiometrics}
-        onClose={() => setHandshakeLink(null)}
+        onClose={() => {
+          setHandshakeLink(null);
+          if (boot.status === "ready") void refreshBalance(boot.vault);
+        }}
         onEnsureVault={handleEnsureVault}
         onVaultUpdated={(vault) => {
           setBoot({ status: "ready", vault });
         }}
         onBalanceRefresh={() => {
-          void getActiveDeviceVault().then((vault) => {
-            if (vault) void refreshBalance(vault);
+          const vault =
+            boot.status === "ready" ? boot.vault : null;
+          if (vault) {
+            void refreshBalance(vault, { invalidate: true, retries: 3 });
+            return;
+          }
+          void getActiveDeviceVault().then((active) => {
+            if (active) {
+              void refreshBalance(active, { invalidate: true, retries: 3 });
+            }
           });
         }}
       />
