@@ -43,12 +43,11 @@ export type PenmtTransferResult = {
 
 export class GasPackRequiredError extends Error {
   readonly code = "GAS_PACK_REQUIRED" as const;
-  constructor(
-    message: string,
-    readonly canSelfServe: boolean,
-  ) {
+  readonly canSelfServe: boolean;
+  constructor(message: string, canSelfServe: boolean) {
     super(message);
     this.name = "GasPackRequiredError";
+    this.canSelfServe = canSelfServe;
   }
 }
 
