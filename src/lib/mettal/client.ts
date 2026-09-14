@@ -415,6 +415,41 @@ export async function getRedeemAddresses(options: {
   return body.data;
 }
 
+/** Ensures the redeem deposit address exists for a chain (creates if missing). */
+export async function ensureRedeemAddress(options: {
+  accessToken: string;
+  chain?: string;
+  symbol?: string;
+}): Promise<MettalRedeemAddress> {
+  const chain = (options.chain ?? METTAL_ACQUIRE_NETWORK).trim().toLowerCase();
+  const symbol = (options.symbol ?? METTAL_DEFAULT_SYMBOL).trim().toUpperCase();
+  const response = await fetch(`${METTAL_API_URL}/v1/account/redeem-address`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${options.accessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ chain, symbol }),
+  });
+  if (!response.ok) throw new Error(await readMettalError(response));
+  const body = (await response.json()) as {
+    success: boolean;
+    data: MettalRedeemAddress;
+  };
+  const address = body.data;
+  if (
+    !body.success ||
+    !address ||
+    typeof address.chain !== "string" ||
+    !address.chain.trim() ||
+    typeof address.address !== "string" ||
+    !address.address.trim()
+  ) {
+    throw new Error("Mettal no devolvió una dirección de retiro.");
+  }
+  return address;
+}
+
 export async function requestRedeemQuote(options: {
   accessToken: string;
   amount: number;

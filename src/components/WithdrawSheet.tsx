@@ -4,15 +4,16 @@ import type { PrivateKeyAccount } from "viem/accounts";
 import {
   authorizeRedeem,
   deleteDestination,
+  ensureRedeemAddress,
   formatMettalMajor,
   formatMettalMajorGrouped,
   getAccountBalances,
-  getRedeemAddresses,
   getRedeemStatus,
   issueMettalAccessToken,
   listDestinations,
   METTAL_ACQUIRE_NETWORK,
   METTAL_DEFAULT_COUNTRY,
+  METTAL_DEFAULT_SYMBOL,
   METTAL_MINOR_UNIT_SCALE,
   METTAL_REDEEM_FIRST_MINOR,
   parseMettalMajorToMinor,
@@ -674,24 +675,27 @@ export function WithdrawSheet({
       step.banks.find((bank) => bank.id === step.selectedId)?.bankAccount ??
       "";
 
-    setStep({ kind: "working", message: "Buscando dirección de retiro…" });
+    setStep({ kind: "working", message: "Preparando dirección de retiro…" });
 
     try {
       let accessToken = session.accessToken;
-      let addresses;
+      let baseAddress;
       try {
-        addresses = await getRedeemAddresses({ accessToken });
+        baseAddress = await ensureRedeemAddress({
+          accessToken,
+          chain: METTAL_ACQUIRE_NETWORK,
+          symbol: METTAL_DEFAULT_SYMBOL,
+        });
       } catch {
         accessToken = await refreshAccessToken(session);
-        addresses = await getRedeemAddresses({ accessToken });
+        baseAddress = await ensureRedeemAddress({
+          accessToken,
+          chain: METTAL_ACQUIRE_NETWORK,
+          symbol: METTAL_DEFAULT_SYMBOL,
+        });
       }
 
-      const baseAddress = addresses.find(
-        (item) =>
-          item.chain.toLowerCase() === METTAL_ACQUIRE_NETWORK &&
-          item.address?.startsWith("0x"),
-      );
-      if (!baseAddress) {
+      if (!baseAddress.address?.startsWith("0x")) {
         throw new Error(
           "No hay dirección de retiro en Base para esta cuenta Mettal.",
         );
