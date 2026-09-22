@@ -10,6 +10,7 @@ import {
   issueMettalAccessToken,
   METTAL_ACQUIRE_NETWORK,
   METTAL_DEFAULT_SYMBOL,
+  METTAL_MINOR_UNIT_SCALE,
   METTAL_MIN_ACQUIRE_MINOR,
   parseMettalMajorToMinor,
   type MettalAcquireAccount,
@@ -25,6 +26,13 @@ import type { DeviceVaultRecord, VaultAccount } from "@/lib/vault/types";
 
 const ACQUIRE_BALANCE_POLL_MS = 7_000;
 const RECEIPT_BALANCE_POLL_MS = 7_000;
+/** Default transfer amount when moving Mettal balance into the app (major units / S/). */
+const DEFAULT_ACQUIRE_MAJOR = 100;
+
+function defaultAcquireAmountInput(acquireBalance: number): string {
+  const capMinor = DEFAULT_ACQUIRE_MAJOR * METTAL_MINOR_UNIT_SCALE;
+  return formatMettalMajor(Math.min(capMinor, acquireBalance));
+}
 
 /** TEMP DEV: always show bank-account screen (pretend Mettal acquire balance is 0). */
 const DEV_TEST_FORCE_BANK_DEPOSIT_SCREEN = false; // import.meta.env.DEV;
@@ -155,6 +163,9 @@ export function AcquireDepositSheet({
           !DEV_TEST_FORCE_BANK_DEPOSIT_SCREEN &&
           unlocked.balances.acquireBalance >= METTAL_MIN_ACQUIRE_MINOR
         ) {
+          setAmountInput(
+            defaultAcquireAmountInput(unlocked.balances.acquireBalance),
+          );
           setStep({
             kind: "amount",
             acquireBalance: unlocked.balances.acquireBalance,
@@ -212,6 +223,7 @@ export function AcquireDepositSheet({
         }
         if (cancelled) return;
         if (balances.acquireBalance > 0) {
+          setAmountInput(defaultAcquireAmountInput(balances.acquireBalance));
           setStep({
             kind: "amount",
             acquireBalance: balances.acquireBalance,
@@ -476,7 +488,7 @@ export function AcquireDepositSheet({
               app?
             </p>
             <p className="mt-5 text-base text-ink-muted">
-              Disponible{" "}
+              Para transferir desde mettal{" "}
               <span className="ml-1 text-2xl font-semibold tabular-nums tracking-tight text-accent">
                 S/ {formatMettalMajorGrouped(step.acquireBalance)}
               </span>
