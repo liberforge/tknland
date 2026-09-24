@@ -16,7 +16,10 @@ import {
   isMockBiometrics,
   isPrfSupported,
 } from "./lib/webauthn/prf";
-import { getActiveDeviceVault } from "./lib/vault/db";
+import {
+  getActiveDeviceVault,
+  requestPersistentStorage,
+} from "./lib/vault/db";
 import { createInitialDeviceVault, markBackupCompleted, verifyVaultUnlock, withDeviceVaultSeed } from "./lib/vault/ceremony";
 import type { DeviceVaultRecord } from "./lib/vault/types";
 import { getPrimaryAddress } from "./lib/vault/evm";
@@ -108,6 +111,8 @@ export default function App() {
         });
         return;
       }
+
+      void requestPersistentStorage();
 
       const vault = await getActiveDeviceVault();
       if (cancelled) return;
