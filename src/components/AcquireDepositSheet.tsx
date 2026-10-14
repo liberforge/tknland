@@ -79,6 +79,8 @@ export function AcquireDepositSheet({
   const [amountInput, setAmountInput] = useState("");
   const [amountError, setAmountError] = useState<string | null>(null);
   const sessionRef = useRef<AcquireSession | null>(null);
+  const vaultRef = useRef(vault);
+  vaultRef.current = vault;
   const onVaultUpdatedRef = useRef(onVaultUpdated);
   onVaultUpdatedRef.current = onVaultUpdated;
   const onBalanceConfirmedRef = useRef(onBalanceConfirmed);
@@ -106,7 +108,8 @@ export function AcquireDepositSheet({
   useEffect(() => {
     if (!open) return;
 
-    if (!vault) {
+    const vaultAtOpen = vaultRef.current;
+    if (!vaultAtOpen) {
       setStep({
         kind: "error",
         message:
@@ -115,7 +118,8 @@ export function AcquireDepositSheet({
       return;
     }
 
-    // One biometric unlock per sheet open; vault updates must not re-prompt.
+    // One biometric unlock per sheet open. Saving the vault must not cancel
+    // the bank-account request that follows.
     if (sessionRef.current) return;
 
     let cancelled = false;
@@ -130,14 +134,14 @@ export function AcquireDepositSheet({
     void (async () => {
       try {
         const unlocked = await withMettalCredentialsAndSeed(
-          vault,
+          vaultAtOpen,
           async ({ credentials, mnemonic }) => {
             const accessToken = await issueMettalAccessToken(credentials);
             const {
               vault: nextVault,
               account,
               signer,
-            } = await ensurePrimaryEvmAccount(vault, mnemonic);
+            } = await ensurePrimaryEvmAccount(vaultAtOpen, mnemonic);
             const balances = await getAccountBalances({ accessToken });
             return {
               credentials,
@@ -198,7 +202,7 @@ export function AcquireDepositSheet({
     return () => {
       cancelled = true;
     };
-  }, [open, vault]);
+  }, [open]);
 
   useEffect(() => {
     if (step.kind !== "waiting-deposit") return;
