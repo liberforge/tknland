@@ -4,8 +4,8 @@ import {
   wipeBytes,
 } from "@/lib/bytes";
 import { decryptUtf8, encryptUtf8 } from "@/lib/crypto/aes";
-import { putVault } from "@/lib/vault/db";
 import { withDeviceVaultKey } from "@/lib/vault/ceremony";
+import { commitDeviceSecrets } from "@/lib/vault/passkey-store";
 import type { DeviceVaultRecord } from "@/lib/vault/types";
 
 /** Dev uses Vite proxy (`/mettal-api` → staging) to avoid CORS on localhost. */
@@ -53,25 +53,24 @@ export async function storeMettalCredentials(
   vault: DeviceVaultRecord,
   credentials: MettalCredentials,
 ): Promise<DeviceVaultRecord> {
-  return withDeviceVaultKey(vault, async (key) => {
+  const updated = await withDeviceVaultKey(vault, async (key) => {
     const plaintext = JSON.stringify(credentials);
     const { iv, ciphertext } = await encryptUtf8(plaintext, key);
 
     try {
-      const updated: DeviceVaultRecord = {
+      return {
         ...vault,
         mettalCredentials: {
           iv: bytesToBase64Url(iv),
           ciphertext: bytesToBase64Url(ciphertext),
         },
       };
-      await putVault(updated);
-      return updated;
     } finally {
       wipeBytes(iv);
       wipeBytes(ciphertext);
     }
   });
+  return commitDeviceSecrets(updated);
 }
 
 export async function disconnectMettal(
@@ -79,8 +78,7 @@ export async function disconnectMettal(
 ): Promise<DeviceVaultRecord> {
   const updated = { ...vault };
   delete updated.mettalCredentials;
-  await putVault(updated);
-  return updated;
+  return commitDeviceSecrets(updated, { replaceMettalCredentials: true });
 }
 
 export async function withMettalCredentials<T>(

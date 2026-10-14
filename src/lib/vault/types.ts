@@ -19,6 +19,8 @@ export type DeviceVaultRecord = {
   accounts: VaultAccount[];
   backupCompleted: boolean;
   balanceAtLeast500Since: number | null;
+  /** `largeBlob` survives iOS eviction; `idb` is the non-iOS fallback. */
+  storage?: "largeBlob" | "idb";
   mettalCredentials?: EncryptedMettalCredentials;
 };
 

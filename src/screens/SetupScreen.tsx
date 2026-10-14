@@ -2,6 +2,7 @@ type SetupScreenProps = {
   busy: boolean;
   error: string | null;
   onSetup: () => void;
+  onRestore?: () => void;
   mockBiometrics?: boolean;
 };
 
@@ -9,6 +10,7 @@ export function SetupScreen({
   busy,
   error,
   onSetup,
+  onRestore,
   mockBiometrics = false,
 }: SetupScreenProps) {
   return (
@@ -45,6 +47,16 @@ export function SetupScreen({
               ? "Crear billetera (mock)"
               : "Crear mi billetera"}
         </button>
+        {onRestore ? (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={onRestore}
+            className="min-h-14 rounded-2xl border border-line bg-surface-raised px-5 text-base font-semibold text-ink transition active:scale-[0.98] disabled:opacity-60"
+          >
+            Ya tengo una billetera en este iPhone
+          </button>
+        ) : null}
       </div>
     </section>
   );

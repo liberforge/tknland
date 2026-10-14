@@ -1,4 +1,4 @@
-import type { AppMeta, VaultRecord } from "@/lib/vault/types";
+import type { AppMeta, DeviceVaultRecord, VaultRecord } from "@/lib/vault/types";
 import type { PaymentIntent } from "@/lib/protocol/types";
 
 const DB_NAME = "tknland";
@@ -8,28 +8,24 @@ const META = "meta";
 const INTENTS = "intents";
 const META_KEY = "app";
 
-let dbPromise: Promise<IDBDatabase> | null = null;
+let queue: Promise<void> = Promise.resolve();
+
+function enqueue<T>(task: () => Promise<T>): Promise<T> {
+  const run = queue.then(task, task);
+  queue = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  return run;
+}
 
 function openDb(): Promise<IDBDatabase> {
-  if (dbPromise) return dbPromise;
-
-  dbPromise = new Promise((resolve, reject) => {
+  return new Promise((resolve, reject) => {
     const req = indexedDB.open(DB_NAME, DB_VERSION);
     req.onerror = () => {
-      dbPromise = null;
       reject(req.error ?? new Error("No se pudo abrir IndexedDB"));
     };
-    req.onsuccess = () => {
-      const db = req.result;
-      db.onversionchange = () => {
-        db.close();
-        dbPromise = null;
-      };
-      db.onclose = () => {
-        dbPromise = null;
-      };
-      resolve(db);
-    };
+    req.onsuccess = () => resolve(req.result);
     req.onupgradeneeded = () => {
       const db = req.result;
       if (!db.objectStoreNames.contains(VAULTS)) {
@@ -43,49 +39,83 @@ function openDb(): Promise<IDBDatabase> {
       }
     };
   });
-
-  return dbPromise;
-}
-
-function idbReq<T>(req: IDBRequest<T>): Promise<T> {
-  return new Promise((resolve, reject) => {
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () =>
-      reject(req.error ?? new Error("Falló la solicitud de IndexedDB"));
-  });
 }
 
 /**
- * Safari aborts a transaction if the database is closed before `complete`,
- * and iOS freezes the page as soon as the user leaves. Wait for the commit
- * (and ask for it immediately) so the write is on disk before that happens.
+ * iOS home-screen web apps drop a long-lived IndexedDB connection when the
+ * screen locks, and the last write never reaches disk. Open, commit, and
+ * close on every call so the write is finished before the app is frozen.
  */
 function runTx<T>(
   storeName: string,
   mode: IDBTransactionMode,
   run: (store: IDBObjectStore) => IDBRequest<T>,
 ): Promise<T> {
-  return openDb().then((db) => {
-    const tx = db.transaction(storeName, mode);
-    const committed = new Promise<void>((resolve, reject) => {
-      tx.oncomplete = () => resolve();
-      tx.onabort = () =>
-        reject(tx.error ?? new Error("La transacción de IndexedDB se abortó"));
-      tx.onerror = () =>
-        reject(tx.error ?? new Error("Falló la transacción de IndexedDB"));
-    });
+  return enqueue(async () => {
+    const db = await openDb();
+    try {
+      return await new Promise<T>((resolve, reject) => {
+        let settled = false;
+        const finish = (settle: () => void) => {
+          if (settled) return;
+          settled = true;
+          try {
+            db.close();
+          } catch {
+            // Already closed.
+          }
+          settle();
+        };
 
-    const result = idbReq(run(tx.objectStore(storeName)));
+        const tx = db.transaction(storeName, mode);
+        const req = run(tx.objectStore(storeName));
+        let value: T;
+        let gotValue = false;
+        req.onsuccess = () => {
+          value = req.result;
+          gotValue = true;
+        };
+        req.onerror = () => {
+          finish(() =>
+            reject(req.error ?? new Error("Falló la solicitud de IndexedDB")),
+          );
+        };
+        tx.oncomplete = () => {
+          finish(() => {
+            if (!gotValue) {
+              reject(new Error("La transacción de IndexedDB no devolvió datos"));
+              return;
+            }
+            resolve(value);
+          });
+        };
+        tx.onabort = () => {
+          finish(() =>
+            reject(tx.error ?? new Error("La transacción de IndexedDB se abortó")),
+          );
+        };
+        tx.onerror = () => {
+          finish(() =>
+            reject(tx.error ?? new Error("Falló la transacción de IndexedDB")),
+          );
+        };
 
-    if (mode === "readwrite") {
+        if (mode === "readwrite") {
+          try {
+            tx.commit();
+          } catch {
+            // Already committing or finished.
+          }
+        }
+      });
+    } catch (err) {
       try {
-        tx.commit();
+        db.close();
       } catch {
-        // Already committing or finished.
+        // Already closed.
       }
+      throw err;
     }
-
-    return Promise.all([result, committed]).then(([value]) => value);
   });
 }
 
@@ -118,8 +148,43 @@ export async function getVault(id: string): Promise<VaultRecord | undefined> {
   return runTx(VAULTS, "readonly", (store) => store.get(id));
 }
 
-export async function putVault(vault: VaultRecord): Promise<void> {
-  await runTx(VAULTS, "readwrite", (store) => store.put(vault));
+export type PutVaultOptions = {
+  /** Omit mettal credentials on purpose (disconnect), instead of keeping the stored ones. */
+  replaceMettalCredentials?: boolean;
+};
+
+/**
+ * Partial updates spread an in-memory vault that may predate the Mettal
+ * connection. Keep credentials and the keychain flag already on disk unless
+ * this write sets them explicitly.
+ */
+export async function putVault(
+  vault: VaultRecord,
+  options?: PutVaultOptions,
+): Promise<VaultRecord> {
+  let next: VaultRecord = vault;
+  if (vault.type === "device") {
+    const existing = await getVault(vault.id);
+    if (existing?.type === "device") {
+      const merged: DeviceVaultRecord = { ...existing, ...vault };
+      if (
+        !options?.replaceMettalCredentials &&
+        !vault.mettalCredentials &&
+        existing.mettalCredentials
+      ) {
+        merged.mettalCredentials = existing.mettalCredentials;
+      }
+      if (options?.replaceMettalCredentials && !vault.mettalCredentials) {
+        delete merged.mettalCredentials;
+      }
+      if (!vault.storage && existing.storage) {
+        merged.storage = existing.storage;
+      }
+      next = merged;
+    }
+  }
+  await runTx(VAULTS, "readwrite", (store) => store.put(next));
+  return next;
 }
 
 export async function getActiveDeviceVault(): Promise<

@@ -13,6 +13,7 @@ import { SetupScreen } from "./screens/SetupScreen";
 import { UnsupportedScreen } from "./screens/UnsupportedScreen";
 import {
   getWebAuthnHostHint,
+  isIosDevice,
   isMockBiometrics,
   isPrfSupported,
 } from "./lib/webauthn/prf";
@@ -21,6 +22,11 @@ import {
   requestPersistentStorage,
 } from "./lib/vault/db";
 import { createInitialDeviceVault, markBackupCompleted, verifyVaultUnlock, withDeviceVaultSeed } from "./lib/vault/ceremony";
+import {
+  commitDeviceSecrets,
+  restoreMettalCredentialsFromPasskey,
+  restoreVaultFromPasskey,
+} from "./lib/vault/passkey-store";
 import type { DeviceVaultRecord } from "./lib/vault/types";
 import { getPrimaryAddress } from "./lib/vault/evm";
 import {
@@ -55,6 +61,8 @@ export default function App() {
   const [boot, setBoot] = useState<BootState>({ status: "loading" });
   const [setupBusy, setSetupBusy] = useState(false);
   const [setupError, setSetupError] = useState<string | null>(null);
+  const [keychainBusy, setKeychainBusy] = useState(false);
+  const [keychainError, setKeychainError] = useState<string | null>(null);
   const [unlockHint, setUnlockHint] = useState<string | null>(null);
   const [homeBalance, setHomeBalance] = useState<string | null>(null);
 
@@ -164,6 +172,46 @@ export default function App() {
     return () => window.removeEventListener("hashchange", consumeHash);
   }, []);
 
+  async function handleRestoreVault() {
+    setSetupBusy(true);
+    setSetupError(null);
+    try {
+      const vault = await restoreVaultFromPasskey();
+      if (!vault) {
+        setSetupError(
+          "No encontramos una billetera guardada en el llavero de este iPhone.",
+        );
+        return;
+      }
+      setBoot({ status: "ready", vault });
+      void refreshBalance(vault);
+    } catch (err) {
+      setSetupError(
+        err instanceof Error ? err.message : "No se pudo restaurar la billetera",
+      );
+    } finally {
+      setSetupBusy(false);
+    }
+  }
+
+  async function handleSaveToKeychain() {
+    if (boot.status !== "ready") return;
+    setKeychainBusy(true);
+    setKeychainError(null);
+    try {
+      const vault = await commitDeviceSecrets(boot.vault);
+      setBoot({ status: "ready", vault });
+    } catch (err) {
+      setKeychainError(
+        err instanceof Error
+          ? err.message
+          : "No se pudo guardar en el llavero.",
+      );
+    } finally {
+      setKeychainBusy(false);
+    }
+  }
+
   async function handleSetup() {
     setSetupBusy(true);
     setSetupError(null);
@@ -223,6 +271,19 @@ export default function App() {
     const vault = await markBackupCompleted(boot.vault);
     setBoot({ status: "ready", vault });
   }
+
+  const handleRestoreMettal = useCallback(async () => {
+    if (boot.status !== "ready") {
+      throw new Error("La billetera aún no está lista.");
+    }
+    const vault = await restoreMettalCredentialsFromPasskey(boot.vault);
+    if (!vault) {
+      throw new Error(
+        "No hay una API key guardada en el llavero. Escanea el QR una vez para dejarla ahí.",
+      );
+    }
+    setBoot({ status: "ready", vault });
+  }, [boot]);
 
   const handleMettalCredentials = useCallback(
     async (credentials: MettalCredentials) => {
@@ -287,6 +348,11 @@ export default function App() {
 
   const handshakeOpen = handshakeLink !== null;
   const readyVault = boot.status === "ready" ? boot.vault : null;
+  const needsKeychainSave =
+    boot.status === "ready" &&
+    !mockBiometrics &&
+    isIosDevice() &&
+    boot.vault.storage == null;
 
   return (
     <div className="mx-auto flex min-h-dvh w-full max-w-md flex-col px-5 pb-[max(2.75rem,env(safe-area-inset-bottom))] pt-[max(0.5rem,env(safe-area-inset-top))]">
@@ -332,7 +398,12 @@ export default function App() {
           <SetupScreen
             busy={setupBusy}
             error={setupError}
-            onSetup={handleSetup}
+            onSetup={() => void handleSetup()}
+            onRestore={
+              mockBiometrics || !isIosDevice()
+                ? undefined
+                : () => void handleRestoreVault()
+            }
             mockBiometrics={mockBiometrics}
           />
         ) : null}
@@ -342,13 +413,37 @@ export default function App() {
           </p>
         ) : null}
         {boot.status === "ready" && sendMode == null ? (
-          <HomeScreen
-            balanceAmount={homeBalance}
-            onAdd={handleAdd}
-            onSend={() => setSendMode("send")}
-            onRequest={() => setSendMode("request")}
-            onWithdraw={handleWithdraw}
-          />
+          <>
+            {needsKeychainSave ? (
+              <div className="rounded-2xl border border-line bg-surface-raised px-4 py-3">
+                <p className="text-sm leading-6 text-ink">
+                  En el iPhone la app del inicio y Safari no comparten datos, y
+                  iOS puede borrarlos. Guarda la billetera y la conexión con
+                  Mettal en el llavero.
+                </p>
+                {keychainError ? (
+                  <p className="mt-2 text-sm text-ink" role="alert">
+                    {keychainError}
+                  </p>
+                ) : null}
+                <button
+                  type="button"
+                  disabled={keychainBusy}
+                  onClick={() => void handleSaveToKeychain()}
+                  className="mt-3 min-h-12 w-full rounded-2xl bg-accent px-4 font-semibold text-surface transition active:scale-[0.98] disabled:opacity-60"
+                >
+                  {keychainBusy ? "Guardando…" : "Guardar en el llavero"}
+                </button>
+              </div>
+            ) : null}
+            <HomeScreen
+              balanceAmount={homeBalance}
+              onAdd={handleAdd}
+              onSend={() => setSendMode("send")}
+              onRequest={() => setSendMode("request")}
+              onWithdraw={handleWithdraw}
+            />
+          </>
         ) : null}
         {boot.status === "ready" && sendMode != null ? (
           <SendScreen
@@ -397,6 +492,9 @@ export default function App() {
             onClose={() => setMettalOpen(false)}
             onContinue={handleMettalContinue}
             onCredentials={handleMettalCredentials}
+            onRestore={
+              mockBiometrics || !isIosDevice() ? undefined : handleRestoreMettal
+            }
           />
           <AcquireDepositSheet
             open={depositOpen}

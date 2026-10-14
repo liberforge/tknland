@@ -44,6 +44,7 @@ export default defineConfig(({ mode }) => {
         registerType: "autoUpdate",
         includeAssets: ["favicon.svg", "apple-touch-icon.png"],
         manifest: {
+          id: "/",
           name: appName,
           short_name: isDev ? "DEV tkn" : "tkn.land",
           description: "Billetera biométrica sencilla",
@@ -51,6 +52,7 @@ export default defineConfig(({ mode }) => {
           background_color: "#111318",
           display: "standalone",
           orientation: "portrait",
+          scope: "/",
           start_url: "/",
           icons: [
             {

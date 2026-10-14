@@ -50,8 +50,11 @@ export async function ensurePrimaryEvmAccount(
     ...vault,
     accounts: [account, ...vault.accounts.slice(1)],
   };
-  await putVault(updated);
-  return { vault: updated, account, signer };
+  const stored = await putVault(updated);
+  if (stored.type !== "device") {
+    return { vault: updated, account, signer };
+  }
+  return { vault: stored, account, signer };
 }
 
 /** Public address only — no biometric when already persisted. */

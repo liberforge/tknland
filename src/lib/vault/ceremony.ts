@@ -14,6 +14,7 @@ import {
   requestPersistentStorage,
   setMeta,
 } from "@/lib/vault/db";
+import { commitDeviceSecrets } from "@/lib/vault/passkey-store";
 import type { DeviceVaultRecord } from "@/lib/vault/types";
 import {
   base64UrlToBytes,
@@ -61,17 +62,19 @@ export async function createInitialDeviceVault(): Promise<DeviceVaultRecord> {
       accounts: [],
       backupCompleted: false,
       balanceAtLeast500Since: null,
+      storage: passkey.largeBlobSupported === true ? undefined : "idb",
     };
-
-    await putVault(vault);
-    await setMeta({
-      credentialId: vault.credentialId,
-      activeVaultId: vault.id,
-    });
 
     wipeBytes(iv);
     wipeBytes(ciphertext);
-    return vault;
+    const stored = await commitDeviceSecrets(vault, {
+      attemptBlob: vault.storage !== "idb",
+    });
+    await setMeta({
+      credentialId: stored.credentialId,
+      activeVaultId: stored.id,
+    });
+    return stored;
   } finally {
     wipeBytes(prfSalt);
     if (prfOutput) wipePrfOutput(prfOutput);
@@ -149,8 +152,9 @@ export async function markBackupCompleted(
     ...vault,
     backupCompleted: true,
   };
-  await putVault(updated);
-  return updated;
+  const stored = await putVault(updated);
+  if (stored.type !== "device") return updated;
+  return stored;
 }
 
 export async function hasSharedPasskey(): Promise<boolean> {
