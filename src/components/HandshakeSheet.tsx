@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import type { Hash } from "viem";
 import {
   buildPayLink,
@@ -13,7 +13,7 @@ import {
   matchPayReply,
   recordCompletedPay,
 } from "@/lib/protocol/intents";
-import { shareText } from "@/lib/share";
+import { openWhatsApp, shareText } from "@/lib/share";
 import {
   getPenmtFeePreview,
   sendPenmtWithFee,
@@ -50,7 +50,7 @@ type Step =
       url: string;
       amount: string;
       message: string;
-      shareMethod: "share" | "clipboard";
+      shareMethod: "share" | "clipboard" | "whatsapp";
     }
   | {
       kind: "enter-amount";
@@ -266,7 +266,7 @@ export function HandshakeSheet({
     });
   }
 
-  async function handleAcceptInvite() {
+  async function handleAcceptInvite(via: "share" | "whatsapp" = "share") {
     if (link?.type !== "invite") return;
     setStep({
       kind: "working",
@@ -274,9 +274,7 @@ export function HandshakeSheet({
         ? mockBiometrics
           ? "Preparando respuesta…"
           : "Confirmando con biometría…"
-        : mockBiometrics
-          ? "Creando billetera…"
-          : "Creando billetera con biometría…",
+        : "Confirmando con biometría…",
     });
 
     try {
@@ -290,6 +288,17 @@ export function HandshakeSheet({
         token: link.token,
       });
       const message = `Envíame ${link.amount} PENMT a esta cuenta TKN:`;
+      if (via === "whatsapp") {
+        setStep({
+          kind: "pay-ready",
+          url,
+          amount: link.amount,
+          message,
+          shareMethod: "whatsapp",
+        });
+        openWhatsApp(`${message}\n${url}`);
+        return;
+      }
       const result = await shareText({
         title: "tkn.land",
         text: message,
@@ -435,7 +444,7 @@ export function HandshakeSheet({
               : step.kind === "receipt"
                 ? "Recibido"
                 : step.kind === "pay-ready"
-                  ? "Responde en el chat"
+                  ? "Has hecho el pedido"
                   : "tkn.land";
 
   return (
@@ -485,15 +494,22 @@ export function HandshakeSheet({
             </p>
             {!vault ? (
               <p className="mt-4 text-sm leading-6 text-ink-muted">
-                Primero crearemos tu billetera con biometría.
+                Te pediremos la biometría para continuar.
               </p>
             ) : null}
             <button
               type="button"
-              onClick={() => void handleAcceptInvite()}
-              className="mt-8 min-h-14 rounded-2xl bg-accent px-5 py-3 font-semibold text-surface transition active:scale-[0.99]"
+              onClick={() => void handleAcceptInvite("whatsapp")}
+              className="mt-8 min-h-14 rounded-2xl bg-[#25D366] px-5 py-3 font-semibold text-[#0b141a] transition active:scale-[0.99]"
             >
-              Responder con mi cuenta TKN
+              Responder via WhatsApp
+            </button>
+            <button
+              type="button"
+              onClick={() => void handleAcceptInvite("share")}
+              className="mt-3 min-h-14 rounded-2xl bg-accent px-5 py-3 font-semibold text-surface transition active:scale-[0.99]"
+            >
+              Responder por otro medio
             </button>
             <button
               type="button"
@@ -508,9 +524,7 @@ export function HandshakeSheet({
         {step.kind === "pay-ready" ? (
           <>
             <p className="mt-4 text-sm leading-6 text-ink-muted">
-              {step.shareMethod === "clipboard"
-                ? "Enlace copiado. Pégalo en el mismo chat para que te envíen el dinero."
-                : "Comparte este enlace en el mismo chat. Cuando lo abran, podrán enviarte el monto."}
+              Este es el texto del enlace
             </p>
             <p className="mt-6 text-3xl font-semibold tabular-nums text-ink">
               {step.amount}{" "}
@@ -545,7 +559,13 @@ export function HandshakeSheet({
         ) : null}
 
         {step.kind === "enter-amount" ? (
-          <>
+          <form
+            className="flex flex-1 flex-col"
+            onSubmit={(event: FormEvent<HTMLFormElement>) => {
+              event.preventDefault();
+              void handleEnterAmountContinue();
+            }}
+          >
             <p className="mt-4 text-sm leading-6 text-ink-muted">
               Escaneaste una cuenta TKN. Indica cuánto quieres enviar.
             </p>
@@ -556,6 +576,7 @@ export function HandshakeSheet({
                 <input
                   type="text"
                   inputMode="decimal"
+                  enterKeyHint="go"
                   autoComplete="off"
                   placeholder="0.00"
                   value={step.amountInput}
@@ -580,8 +601,7 @@ export function HandshakeSheet({
             ) : null}
             <div className="mt-8 flex gap-3">
               <button
-                type="button"
-                onClick={() => void handleEnterAmountContinue()}
+                type="submit"
                 className="min-h-14 min-w-0 flex-[2] rounded-2xl bg-accent px-4 py-3 font-semibold text-surface transition active:scale-[0.99]"
               >
                 Continuar
@@ -594,7 +614,7 @@ export function HandshakeSheet({
                 Cancelar
               </button>
             </div>
-          </>
+          </form>
         ) : null}
 
         {step.kind === "confirm" ? (

@@ -13,15 +13,22 @@ export type DeviceVaultRecord = {
   type: "device";
   label: string;
   credentialId: string;
+  /** Also inside the passkey blob. Kept here so one biometric prompt can read it. */
   prfSalt: string;
-  iv: string;
-  ciphertext: string;
+  /**
+   * Encrypted seed. Omitted once the passkey blob is the copy that survives
+   * the browser deleting site data.
+   */
+  iv?: string;
+  ciphertext?: string;
   accounts: VaultAccount[];
   backupCompleted: boolean;
   balanceAtLeast500Since: number | null;
-  /** `largeBlob` survives iOS eviction; `idb` is the non-iOS fallback. */
+  /** `largeBlob` is the passkey copy. `idb` means that write has not succeeded yet. */
   storage?: "largeBlob" | "idb";
   mettalCredentials?: EncryptedMettalCredentials;
+  /** The passkey blob has a Mettal API key. Set without storing that key here. */
+  mettalConnected?: boolean;
 };
 
 export type ColdVaultRecord = {

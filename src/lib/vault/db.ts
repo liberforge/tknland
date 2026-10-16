@@ -1,5 +1,6 @@
 import type { AppMeta, DeviceVaultRecord, VaultRecord } from "@/lib/vault/types";
 import type { PaymentIntent } from "@/lib/protocol/types";
+import { isMockBiometrics } from "@/lib/webauthn/mock-biometrics";
 
 const DB_NAME = "tknland";
 const DB_VERSION = 2;
@@ -42,7 +43,7 @@ function openDb(): Promise<IDBDatabase> {
 }
 
 /**
- * iOS home-screen web apps drop a long-lived IndexedDB connection when the
+ * Some mobile browsers drop a long-lived IndexedDB connection when the
  * screen locks, and the last write never reaches disk. Open, commit, and
  * close on every call so the write is finished before the app is frozen.
  */
@@ -154,6 +155,21 @@ export type PutVaultOptions = {
 };
 
 /**
+ * The passkey blob is the copy that survives the browser deleting site data.
+ * IndexedDB then keeps the address, the salt, and whether Mettal is connected.
+ */
+function withoutDuplicatedSecrets(vault: DeviceVaultRecord): DeviceVaultRecord {
+  if (isMockBiometrics() || vault.storage !== "largeBlob") return vault;
+  const mettalConnected =
+    vault.mettalConnected === true || vault.mettalCredentials != null;
+  const next: DeviceVaultRecord = { ...vault, mettalConnected };
+  delete next.iv;
+  delete next.ciphertext;
+  delete next.mettalCredentials;
+  return next;
+}
+
+/**
  * Partial updates spread an in-memory vault that may predate the Mettal
  * connection. Keep credentials and the keychain flag already on disk unless
  * this write sets them explicitly.
@@ -182,6 +198,7 @@ export async function putVault(
       }
       next = merged;
     }
+    if (next.type === "device") next = withoutDuplicatedSecrets(next);
   }
   await runTx(VAULTS, "readwrite", (store) => store.put(next));
   return next;
@@ -193,11 +210,23 @@ export async function getActiveDeviceVault(): Promise<
   const [meta, vaults] = await Promise.all([getMeta(), listVaults()]);
   const devices = vaults.filter((v) => v.type === "device");
   if (devices.length === 0) return null;
-  if (meta.activeVaultId) {
-    const active = devices.find((v) => v.id === meta.activeVaultId);
-    if (active) return active;
+  const active = meta.activeVaultId
+    ? devices.find((v) => v.id === meta.activeVaultId) ?? devices[0]
+    : devices[0];
+  if (!active) return null;
+  if (
+    !isMockBiometrics() &&
+    active.storage === "largeBlob" &&
+    (active.iv || active.ciphertext || active.mettalCredentials)
+  ) {
+    const scrubbed = await putVault({
+      ...active,
+      mettalConnected:
+        active.mettalConnected === true || active.mettalCredentials != null,
+    });
+    return scrubbed.type === "device" ? scrubbed : active;
   }
-  return devices[0] ?? null;
+  return active;
 }
 
 export async function getIntent(

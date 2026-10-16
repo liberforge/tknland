@@ -66,17 +66,17 @@ export function HomeScreen({
         <div className="grid grid-cols-2 gap-3">
           <ActionButton
             className="animate-rise-delay-2"
-            label="Enviar"
-            hint="A otra persona"
-            glyph="send"
-            onClick={onSend}
-          />
-          <ActionButton
-            className="animate-rise-delay-3"
             label="Pedir"
             hint="Que te envíen"
             glyph="request"
             onClick={onRequest}
+          />
+          <ActionButton
+            className="animate-rise-delay-3"
+            label="Ofrecer Envío"
+            hint="A otra persona"
+            glyph="send"
+            onClick={onSend}
           />
         </div>
 

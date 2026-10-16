@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import {
   buildInviteLink,
   buildPayLink,
@@ -8,7 +8,7 @@ import {
   PROTOCOL_TOKEN_PENMT,
 } from "@/lib/protocol/links";
 import { createPaymentIntent } from "@/lib/protocol/intents";
-import { shareText } from "@/lib/share";
+import { openWhatsApp, shareText } from "@/lib/share";
 import { getPenmtBalance } from "@/lib/evm/penmt";
 import { withDeviceVaultSeed } from "@/lib/vault/ceremony";
 import {
@@ -35,7 +35,7 @@ type Step =
       amount: string;
       url: string;
       message: string;
-      shareMethod: "share" | "clipboard";
+      shareMethod: "share" | "clipboard" | "whatsapp";
     }
   | { kind: "error"; message: string };
 
@@ -119,7 +119,7 @@ export function SendScreen({
     });
   }
 
-  async function handleCreateInvite() {
+  async function handleCreateInvite(via: "share" | "whatsapp" = "share") {
     const amount = normalizeProtocolAmount(amountInput);
     if (!amount) {
       setAmountError("Ingresa un monto válido (ej. 10.00).");
@@ -140,6 +140,17 @@ export function SendScreen({
       });
       const url = buildInviteLink({ id: intent.id, amount: intent.amount });
       const message = `Te quiero enviar ${amount} PENMT. Abre el enlace para aceptar:`;
+      if (via === "whatsapp") {
+        setStep({
+          kind: "shared",
+          amount,
+          url,
+          message,
+          shareMethod: "whatsapp",
+        });
+        openWhatsApp(`${message}\n${url}`);
+        return;
+      }
       const result = await shareText({
         title: "tkn.land",
         text: message,
@@ -165,7 +176,7 @@ export function SendScreen({
     }
   }
 
-  async function handleCreateRequest() {
+  async function handleCreateRequest(via: "share" | "whatsapp" = "share") {
     if (!vault) {
       setStep({
         kind: "error",
@@ -195,6 +206,17 @@ export function SendScreen({
       const id = newHandshakeId();
       const url = buildPayLink({ id, addr: address, amount });
       const message = `Te pido ${amount} PENMT. Abre el enlace para enviar:`;
+      if (via === "whatsapp") {
+        setStep({
+          kind: "shared",
+          amount,
+          url,
+          message,
+          shareMethod: "whatsapp",
+        });
+        openWhatsApp(`${message}\n${url}`);
+        return;
+      }
       const result = await shareText({
         title: "tkn.land",
         text: message,
@@ -220,14 +242,20 @@ export function SendScreen({
     }
   }
 
+  function handleAmountFormSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (mode === "send") void handleCreateInvite();
+    else void handleCreateRequest("share");
+  }
+
   const title =
     step.kind === "shared"
       ? mode === "send"
-        ? "Comparte el enlace"
+        ? "Compartiste un enlace"
         : "Comparte el pedido"
       : mode === "request"
         ? "Pedir"
-        : "Enviar";
+        : "Ofrecer Envío";
 
   const requestHint =
     "Indica cuánto pides. Quien abra el enlace podrá enviártelo.";
@@ -273,7 +301,7 @@ export function SendScreen({
 
       <div className={`${mode === "request" ? "mt-8" : "mt-5"} flex flex-1 flex-col`}>
         {step.kind === "amount" ? (
-          <>
+          <form className="flex flex-1 flex-col" onSubmit={handleAmountFormSubmit}>
             {mode === "send" ? (
               <p className="text-sm leading-6 text-ink-muted">
                 Indica cuánto quieres enviar. Para aceptar la otra persona debe
@@ -295,7 +323,7 @@ export function SendScreen({
             <div className={mode === "send" ? "mt-5" : undefined}>
               {mode === "send" ? (
                 <span className="text-sm font-medium text-ink">
-                  Monto a enviar
+                  Monto a ofrecer
                 </span>
               ) : null}
               <div
@@ -304,6 +332,7 @@ export function SendScreen({
                 <input
                   type="text"
                   inputMode="decimal"
+                  enterKeyHint="go"
                   autoComplete="off"
                   placeholder="0.00"
                   value={amountInput}
@@ -323,17 +352,29 @@ export function SendScreen({
                 {amountError}
               </p>
             ) : null}
-            <div className="mt-8 flex gap-3">
+            {mode === "request" ? (
               <button
                 type="button"
-                onClick={() =>
-                  mode === "send"
-                    ? void handleCreateInvite()
-                    : void handleCreateRequest()
-                }
-                className="min-h-12 min-w-0 flex-[2] rounded-2xl bg-accent px-4 py-3 font-semibold text-surface transition active:scale-[0.99]"
+                onClick={() => void handleCreateRequest("whatsapp")}
+                className="mt-8 min-h-12 w-full rounded-2xl bg-[#25D366] px-4 py-3 font-semibold text-[#0b141a] transition active:scale-[0.99]"
               >
-                {mode === "send" ? "Continuar" : "Enviar Pedido"}
+                Pedir por WhatsApp
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => void handleCreateInvite("whatsapp")}
+                className="mt-8 min-h-12 w-full rounded-2xl bg-[#25D366] px-4 py-3 font-semibold text-[#0b141a] transition active:scale-[0.99]"
+              >
+                Ofrecer via WhatsApp
+              </button>
+            )}
+            <div className="mt-3 flex gap-3">
+              <button
+                type="submit"
+                className="min-h-12 min-w-0 flex-[2] rounded-2xl bg-accent px-4 py-3 text-center font-semibold leading-tight text-surface transition active:scale-[0.99]"
+              >
+                {mode === "send" ? "Ofrecer por otros medios" : "Enviar Pedido"}
               </button>
               <button
                 type="button"
@@ -377,7 +418,7 @@ export function SendScreen({
                 </button>
               </div>
             ) : null}
-          </>
+          </form>
         ) : null}
 
         {step.kind === "working" ? (
@@ -389,11 +430,15 @@ export function SendScreen({
         {step.kind === "shared" ? (
           <>
             <p className="text-sm leading-6 text-ink-muted">
-              {step.shareMethod === "clipboard"
-                ? "Enlace copiado. Pégalo en WhatsApp u otro chat."
-                : mode === "send"
-                  ? "Cuando respondan con su enlace, ábrelo aquí para confirmar el envío."
-                  : "Cuando abran tu pedido podrán enviarte el monto."}
+              {step.shareMethod === "whatsapp"
+                ? mode === "send"
+                  ? "WhatsApp tiene la oferta. Elige un chat y toca Enviar."
+                  : "WhatsApp tiene el pedido. Elige un chat y toca Enviar."
+                : step.shareMethod === "clipboard"
+                  ? "Enlace copiado. Pégalo en WhatsApp u otro chat."
+                  : mode === "send"
+                    ? "Cuando respondan con su enlace, ábrelo aquí para confirmar el envío."
+                    : "Cuando abran tu pedido podrán enviarte el monto."}
             </p>
             <p className="mt-6 text-3xl font-semibold tabular-nums tracking-tight text-ink">
               {step.amount}{" "}

@@ -13,9 +13,8 @@ export function UnsupportedScreen({ reason }: UnsupportedScreenProps) {
           Se requiere biometría
         </h1>
         <p className="mt-4 text-base leading-relaxed text-ink-muted">
-          tkn.land necesita una clave de acceso compatible con PRF (Face ID o
-          huella digital) para proteger tu billetera. Este teléfono o navegador
-          aún no la admite.
+          tkn.land necesita una clave de acceso compatible con biometría para
+          proteger tu billetera. Este teléfono o navegador aún no la admite.
         </p>
         {reason ? (
           <p className="mt-4 text-sm text-ink-muted/80">{reason}</p>

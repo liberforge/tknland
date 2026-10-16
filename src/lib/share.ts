@@ -38,6 +38,13 @@ export async function shareText(input: {
   return { method: "clipboard" };
 }
 
+/** Opens WhatsApp with the message filled in. The user picks the chat and taps Send. */
+export function openWhatsApp(text: string): void {
+  window.location.assign(
+    `https://wa.me/?text=${encodeURIComponent(text)}`,
+  );
+}
+
 function isAbortError(err: unknown): boolean {
   return (
     (err instanceof DOMException && err.name === "AbortError") ||

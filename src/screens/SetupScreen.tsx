@@ -2,7 +2,6 @@ type SetupScreenProps = {
   busy: boolean;
   error: string | null;
   onSetup: () => void;
-  onRestore?: () => void;
   mockBiometrics?: boolean;
 };
 
@@ -10,7 +9,6 @@ export function SetupScreen({
   busy,
   error,
   onSetup,
-  onRestore,
   mockBiometrics = false,
 }: SetupScreenProps) {
   return (
@@ -24,8 +22,8 @@ export function SetupScreen({
         </h1>
         <p className="mt-5 max-w-[20rem] text-base leading-relaxed text-ink-muted">
           {mockBiometrics
-            ? "Modo mock activo: se creará una bóveda local sin Face ID ni huella."
-            : "Toca el botón para crearla. Te pediremos Face ID o tu huella, sin ninguna configuración adicional."}
+            ? "Modo mock activo: se preparará una billetera local sin biometría."
+            : "Toca el botón. Te pediremos la biometría, sin ninguna configuración adicional."}
         </p>
       </div>
 
@@ -41,22 +39,8 @@ export function SetupScreen({
           onClick={onSetup}
           className="min-h-14 rounded-2xl bg-accent px-5 text-lg font-semibold text-surface transition active:scale-[0.98] disabled:opacity-60"
         >
-          {busy
-            ? "Configurando…"
-            : mockBiometrics
-              ? "Crear billetera (mock)"
-              : "Crear mi billetera"}
+          {busy ? "Un momento…" : "Continuar"}
         </button>
-        {onRestore ? (
-          <button
-            type="button"
-            disabled={busy}
-            onClick={onRestore}
-            className="min-h-14 rounded-2xl border border-line bg-surface-raised px-5 text-base font-semibold text-ink transition active:scale-[0.98] disabled:opacity-60"
-          >
-            Ya tengo una billetera en este iPhone
-          </button>
-        ) : null}
       </div>
     </section>
   );

@@ -1,10 +1,6 @@
-import {
-  base64UrlToBytes,
-  bytesToBase64Url,
-  wipeBytes,
-} from "@/lib/bytes";
+import { bytesToBase64Url, wipeBytes } from "@/lib/bytes";
 import { decryptUtf8, encryptUtf8 } from "@/lib/crypto/aes";
-import { withDeviceVaultKey } from "@/lib/vault/ceremony";
+import { withDeviceVaultSecrets } from "@/lib/vault/ceremony";
 import { commitDeviceSecrets } from "@/lib/vault/passkey-store";
 import type { DeviceVaultRecord } from "@/lib/vault/types";
 
@@ -53,31 +49,48 @@ export async function storeMettalCredentials(
   vault: DeviceVaultRecord,
   credentials: MettalCredentials,
 ): Promise<DeviceVaultRecord> {
-  const updated = await withDeviceVaultKey(vault, async (key) => {
-    const plaintext = JSON.stringify(credentials);
-    const { iv, ciphertext } = await encryptUtf8(plaintext, key);
+  const updated = await withDeviceVaultSecrets(
+    vault,
+    async ({ aesKey, seedIv, seedCiphertext }) => {
+      const plaintext = JSON.stringify(credentials);
+      const encrypted = await encryptUtf8(plaintext, aesKey);
 
-    try {
-      return {
-        ...vault,
-        mettalCredentials: {
-          iv: bytesToBase64Url(iv),
-          ciphertext: bytesToBase64Url(ciphertext),
-        },
-      };
-    } finally {
-      wipeBytes(iv);
-      wipeBytes(ciphertext);
-    }
-  });
+      try {
+        return {
+          ...vault,
+          iv: bytesToBase64Url(seedIv),
+          ciphertext: bytesToBase64Url(seedCiphertext),
+          mettalConnected: true,
+          mettalCredentials: {
+            iv: bytesToBase64Url(encrypted.iv),
+            ciphertext: bytesToBase64Url(encrypted.ciphertext),
+          },
+        };
+      } finally {
+        wipeBytes(encrypted.iv);
+        wipeBytes(encrypted.ciphertext);
+      }
+    },
+  );
   return commitDeviceSecrets(updated);
 }
 
 export async function disconnectMettal(
   vault: DeviceVaultRecord,
 ): Promise<DeviceVaultRecord> {
-  const updated = { ...vault };
-  delete updated.mettalCredentials;
+  const updated = await withDeviceVaultSecrets(
+    vault,
+    async ({ seedIv, seedCiphertext }) => {
+      const next: DeviceVaultRecord = {
+        ...vault,
+        iv: bytesToBase64Url(seedIv),
+        ciphertext: bytesToBase64Url(seedCiphertext),
+        mettalConnected: false,
+      };
+      delete next.mettalCredentials;
+      return next;
+    },
+  );
   return commitDeviceSecrets(updated, { replaceMettalCredentials: true });
 }
 
@@ -85,25 +98,26 @@ export async function withMettalCredentials<T>(
   vault: DeviceVaultRecord,
   useCredentials: (credentials: MettalCredentials) => Promise<T> | T,
 ): Promise<T> {
-  const encrypted = vault.mettalCredentials;
-  if (!encrypted) {
+  if (!vault.mettalCredentials && vault.mettalConnected !== true) {
     throw new Error("Mettal no está conectado.");
   }
 
-  const iv = base64UrlToBytes(encrypted.iv);
-  const ciphertext = base64UrlToBytes(encrypted.ciphertext);
   let plaintext: string | null = null;
   let credentials: MettalCredentials | null = null;
 
   try {
-    return await withDeviceVaultKey(vault, async (key) => {
-      plaintext = await decryptUtf8({ iv, ciphertext }, key);
+    return await withDeviceVaultSecrets(vault, async (secrets) => {
+      if (!secrets.mettalIv || !secrets.mettalCiphertext) {
+        throw new Error("Mettal no está conectado.");
+      }
+      plaintext = await decryptUtf8(
+        { iv: secrets.mettalIv, ciphertext: secrets.mettalCiphertext },
+        secrets.aesKey,
+      );
       credentials = parseMettalQrPayload(plaintext);
       return await useCredentials(credentials);
     });
   } finally {
-    wipeBytes(iv);
-    wipeBytes(ciphertext);
     plaintext = null;
     credentials = null;
   }
@@ -117,37 +131,31 @@ export async function withMettalCredentialsAndSeed<T>(
     mnemonic: string;
   }) => Promise<T> | T,
 ): Promise<T> {
-  const encrypted = vault.mettalCredentials;
-  if (!encrypted) {
+  if (!vault.mettalCredentials && vault.mettalConnected !== true) {
     throw new Error("Mettal no está conectado.");
   }
 
-  const seedIv = base64UrlToBytes(vault.iv);
-  const seedCiphertext = base64UrlToBytes(vault.ciphertext);
-  const credIv = base64UrlToBytes(encrypted.iv);
-  const credCiphertext = base64UrlToBytes(encrypted.ciphertext);
   let mnemonic: string | null = null;
   let credPlaintext: string | null = null;
   let credentials: MettalCredentials | null = null;
 
   try {
-    return await withDeviceVaultKey(vault, async (key) => {
+    return await withDeviceVaultSecrets(vault, async (secrets) => {
+      if (!secrets.mettalIv || !secrets.mettalCiphertext) {
+        throw new Error("Mettal no está conectado.");
+      }
       mnemonic = await decryptUtf8(
-        { iv: seedIv, ciphertext: seedCiphertext },
-        key,
+        { iv: secrets.seedIv, ciphertext: secrets.seedCiphertext },
+        secrets.aesKey,
       );
       credPlaintext = await decryptUtf8(
-        { iv: credIv, ciphertext: credCiphertext },
-        key,
+        { iv: secrets.mettalIv, ciphertext: secrets.mettalCiphertext },
+        secrets.aesKey,
       );
       credentials = parseMettalQrPayload(credPlaintext);
       return await use({ credentials, mnemonic });
     });
   } finally {
-    wipeBytes(seedIv);
-    wipeBytes(seedCiphertext);
-    wipeBytes(credIv);
-    wipeBytes(credCiphertext);
     mnemonic = null;
     credPlaintext = null;
     credentials = null;

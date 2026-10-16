@@ -1,11 +1,10 @@
 import { base64UrlToBytes, bytesToBase64Url } from "@/lib/bytes";
-import { putVault, setMeta } from "@/lib/vault/db";
+import { getVault, putVault, setMeta } from "@/lib/vault/db";
 import { decodePasskeyBlob, encodePasskeyBlob } from "@/lib/vault/passkey-blob";
 import type { DeviceVaultRecord } from "@/lib/vault/types";
 import {
   WebAuthnCancelled,
   formatCredentialId,
-  isIosDevice,
   isMockBiometrics,
   parseCredentialId,
   readPasskeyBlob,
@@ -30,6 +29,9 @@ function formatAddress(bytes: Uint8Array): string {
 }
 
 function encodeVault(vault: DeviceVaultRecord): Uint8Array {
+  if (!vault.iv || !vault.ciphertext) {
+    throw new Error("El llavero no tiene una billetera.");
+  }
   const mettal = vault.mettalCredentials;
   return encodePasskeyBlob({
     vaultId: vault.id,
@@ -43,39 +45,34 @@ function encodeVault(vault: DeviceVaultRecord): Uint8Array {
 }
 
 /**
- * Write secrets to the passkey, then cache them in IndexedDB.
- * On iOS the keychain write is required. Elsewhere a failed write falls back
- * to IndexedDB so Android is not blocked on flaky largeBlob support.
+ * Write secrets to the passkey on every real device. IndexedDB then stores
+ * only the public cache. If this device cannot write the blob, the secrets
+ * stay in IndexedDB so the wallet still opens.
  */
 export async function commitDeviceSecrets(
   vault: DeviceVaultRecord,
   options?: { replaceMettalCredentials?: boolean; attemptBlob?: boolean },
 ): Promise<DeviceVaultRecord> {
   let next: DeviceVaultRecord = vault;
-  // Android platform authenticators rarely implement largeBlob. IndexedDB is
-  // durable there, so only write the passkey when it is already in use, the
-  // device just reported support, or this is iOS.
-  const shouldWriteBlob =
-    !isMockBiometrics() &&
-    vault.storage !== "idb" &&
-    (vault.storage === "largeBlob" ||
-      isIosDevice() ||
-      options?.attemptBlob === true);
-  if (shouldWriteBlob) {
+  if (isMockBiometrics()) {
+    next = { ...vault, storage: "idb" };
+  } else if (options?.attemptBlob !== false) {
+    const ready = await vaultWithSecrets(vault, options);
     try {
       await writePasskeyBlob(
-        parseCredentialId(vault.credentialId),
-        encodeVault(vault),
+        parseCredentialId(ready.credentialId),
+        encodeVault(ready),
       );
-      next = { ...vault, storage: "largeBlob" };
+      next = {
+        ...ready,
+        storage: "largeBlob",
+        mettalConnected:
+          ready.mettalConnected === true || ready.mettalCredentials != null,
+      };
     } catch (err) {
       if (err instanceof WebAuthnCancelled) throw err;
-      // iOS often completes Face ID and then refuses the keychain write
-      // (`written` is false). Keep the wallet in IndexedDB so setup can finish.
-      next = { ...vault, storage: "idb" };
+      next = { ...ready, storage: "idb" };
     }
-  } else if (isMockBiometrics()) {
-    next = { ...vault, storage: "idb" };
   }
 
   const stored = await putVault(next, {
@@ -85,9 +82,40 @@ export async function commitDeviceSecrets(
   return stored;
 }
 
-export async function restoreVaultFromPasskey(): Promise<DeviceVaultRecord | null> {
+/** Fill seed fields from the passkey when IndexedDB no longer has them. */
+async function vaultWithSecrets(
+  vault: DeviceVaultRecord,
+  options?: { replaceMettalCredentials?: boolean },
+): Promise<DeviceVaultRecord> {
+  if (vault.iv && vault.ciphertext && vault.prfSalt) return vault;
+  const { blob } = await readPasskeyBlob(parseCredentialId(vault.credentialId));
+  if (!blob) {
+    throw new Error("El llavero no tiene una billetera.");
+  }
+  const decoded = decodePasskeyBlob(blob);
+  const fromBlob =
+    !options?.replaceMettalCredentials &&
+    decoded.mettalIv &&
+    decoded.mettalCiphertext
+      ? {
+          iv: bytesToBase64Url(decoded.mettalIv),
+          ciphertext: bytesToBase64Url(decoded.mettalCiphertext),
+        }
+      : undefined;
+  return {
+    ...vault,
+    prfSalt: vault.prfSalt || bytesToBase64Url(decoded.prfSalt),
+    iv: bytesToBase64Url(decoded.seedIv),
+    ciphertext: bytesToBase64Url(decoded.seedCiphertext),
+    mettalCredentials: vault.mettalCredentials ?? fromBlob,
+  };
+}
+
+export async function restoreVaultFromPasskey(options?: {
+  immediate?: boolean;
+}): Promise<DeviceVaultRecord | null> {
   if (isMockBiometrics()) return null;
-  const { credentialId, blob } = await readPasskeyBlob();
+  const { credentialId, blob } = await readPasskeyBlob(undefined, options);
   if (!blob) return null;
 
   let decoded;
@@ -97,27 +125,25 @@ export async function restoreVaultFromPasskey(): Promise<DeviceVaultRecord | nul
     return null;
   }
 
+  const previous = await getVault(decoded.vaultId);
+  const previousDevice = previous?.type === "device" ? previous : null;
   const vault: DeviceVaultRecord = {
     id: decoded.vaultId,
     type: "device",
-    label: "Personal",
+    label: previousDevice?.label ?? "Personal",
     credentialId: formatCredentialId(credentialId),
     prfSalt: bytesToBase64Url(decoded.prfSalt),
-    iv: bytesToBase64Url(decoded.seedIv),
-    ciphertext: bytesToBase64Url(decoded.seedCiphertext),
-    accounts: decoded.address
-      ? [{ path: PRIMARY_ACCOUNT_PATH, address: formatAddress(decoded.address) }]
-      : [],
-    backupCompleted: false,
-    balanceAtLeast500Since: null,
+    accounts:
+      previousDevice && previousDevice.accounts.length > 0
+        ? previousDevice.accounts
+        : decoded.address
+          ? [{ path: PRIMARY_ACCOUNT_PATH, address: formatAddress(decoded.address) }]
+          : [],
+    backupCompleted: previousDevice?.backupCompleted ?? false,
+    balanceAtLeast500Since: previousDevice?.balanceAtLeast500Since ?? null,
     storage: "largeBlob",
+    mettalConnected: Boolean(decoded.mettalIv && decoded.mettalCiphertext),
   };
-  if (decoded.mettalIv && decoded.mettalCiphertext) {
-    vault.mettalCredentials = {
-      iv: bytesToBase64Url(decoded.mettalIv),
-      ciphertext: bytesToBase64Url(decoded.mettalCiphertext),
-    };
-  }
 
   const stored = await putVault(vault, { replaceMettalCredentials: true });
   if (stored.type !== "device") return null;

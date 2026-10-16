@@ -14,7 +14,6 @@ type MettalConnectSheetProps = {
   onClose: () => void;
   onContinue: () => void;
   onCredentials: (credentials: MettalCredentials) => Promise<void>;
-  onRestore?: () => Promise<void>;
 };
 
 export function MettalConnectSheet({
@@ -25,7 +24,6 @@ export function MettalConnectSheet({
   onClose,
   onContinue,
   onCredentials,
-  onRestore,
 }: MettalConnectSheetProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const processingRef = useRef(false);
@@ -197,27 +195,6 @@ export function MettalConnectSheet({
                 >
                   Escanear código QR
                 </button>
-                {onRestore ? (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setError(null);
-                      setSaving(true);
-                      void onRestore()
-                        .catch((err: unknown) => {
-                          setError(
-                            err instanceof Error
-                              ? err.message
-                              : "No se pudo recuperar la conexión.",
-                          );
-                        })
-                        .finally(() => setSaving(false));
-                    }}
-                    className="min-h-14 rounded-2xl border border-line bg-surface-raised px-5 py-3 font-semibold text-ink transition active:scale-[0.99]"
-                  >
-                    Recuperar conexión de este iPhone
-                  </button>
-                ) : null}
               </div>
             ) : null}
 

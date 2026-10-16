@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { HomeScreen } from "./screens/HomeScreen";
 import { MenuSheet } from "./components/MenuSheet";
 import { MettalConnectSheet } from "./components/MettalConnectSheet";
@@ -13,7 +13,6 @@ import { SetupScreen } from "./screens/SetupScreen";
 import { UnsupportedScreen } from "./screens/UnsupportedScreen";
 import {
   getWebAuthnHostHint,
-  isIosDevice,
   isMockBiometrics,
   isPrfSupported,
 } from "./lib/webauthn/prf";
@@ -21,12 +20,7 @@ import {
   getActiveDeviceVault,
   requestPersistentStorage,
 } from "./lib/vault/db";
-import { createInitialDeviceVault, markBackupCompleted, verifyVaultUnlock, withDeviceVaultSeed } from "./lib/vault/ceremony";
-import {
-  commitDeviceSecrets,
-  restoreMettalCredentialsFromPasskey,
-  restoreVaultFromPasskey,
-} from "./lib/vault/passkey-store";
+import { markBackupCompleted, openOrCreateDeviceVault, verifyVaultUnlock, withDeviceVaultSeed } from "./lib/vault/ceremony";
 import type { DeviceVaultRecord } from "./lib/vault/types";
 import { getPrimaryAddress } from "./lib/vault/evm";
 import {
@@ -36,7 +30,10 @@ import {
 } from "./lib/mettal/credentials";
 import {
   clearLocationHash,
+  forgetPendingHandshake,
   parseHandshakeLink,
+  readPendingHandshake,
+  rememberPendingHandshake,
   type HandshakeLink,
 } from "./lib/protocol/links";
 import { getPenmtBalance } from "./lib/evm/penmt";
@@ -61,13 +58,13 @@ export default function App() {
   const [boot, setBoot] = useState<BootState>({ status: "loading" });
   const [setupBusy, setSetupBusy] = useState(false);
   const [setupError, setSetupError] = useState<string | null>(null);
-  const [keychainBusy, setKeychainBusy] = useState(false);
-  const [keychainError, setKeychainError] = useState<string | null>(null);
   const [unlockHint, setUnlockHint] = useState<string | null>(null);
   const [homeBalance, setHomeBalance] = useState<string | null>(null);
+  const consumedHashRef = useRef("");
 
   const mettalConnected =
-    boot.status === "ready" && Boolean(boot.vault.mettalCredentials);
+    boot.status === "ready" &&
+    (boot.vault.mettalConnected === true || Boolean(boot.vault.mettalCredentials));
 
   const refreshBalance = useCallback(
     async (
@@ -155,10 +152,19 @@ export default function App() {
   }, [boot, refreshBalance]);
 
   useEffect(() => {
+    // iOS often resumes an already-open page without hashchange, and a later
+    // reload can drop the fragment. Re-read on focus, and keep a short-lived
+    // copy so the action still opens.
     function consumeHash() {
-      const parsed = parseHandshakeLink(window.location.hash);
+      const fromLocation = window.location.hash;
+      const raw = parseHandshakeLink(fromLocation)
+        ? fromLocation
+        : (readPendingHandshake() ?? "");
+      if (!raw || raw === consumedHashRef.current) return;
+      const parsed = parseHandshakeLink(raw);
       if (!parsed) return;
-      clearLocationHash();
+      consumedHashRef.current = raw;
+      rememberPendingHandshake(raw);
       setSendMode(null);
       setDepositOpen(false);
       setWithdrawOpen(false);
@@ -167,61 +173,35 @@ export default function App() {
       setHandshakeLink(parsed);
     }
 
+    function consumeWhenVisible() {
+      if (document.visibilityState === "hidden") return;
+      consumeHash();
+    }
+
     consumeHash();
     window.addEventListener("hashchange", consumeHash);
-    return () => window.removeEventListener("hashchange", consumeHash);
+    window.addEventListener("pageshow", consumeWhenVisible);
+    window.addEventListener("focus", consumeWhenVisible);
+    document.addEventListener("visibilitychange", consumeWhenVisible);
+    return () => {
+      consumedHashRef.current = "";
+      window.removeEventListener("hashchange", consumeHash);
+      window.removeEventListener("pageshow", consumeWhenVisible);
+      window.removeEventListener("focus", consumeWhenVisible);
+      document.removeEventListener("visibilitychange", consumeWhenVisible);
+    };
   }, []);
-
-  async function handleRestoreVault() {
-    setSetupBusy(true);
-    setSetupError(null);
-    try {
-      const vault = await restoreVaultFromPasskey();
-      if (!vault) {
-        setSetupError(
-          "No encontramos una billetera guardada en el llavero de este iPhone.",
-        );
-        return;
-      }
-      setBoot({ status: "ready", vault });
-      void refreshBalance(vault);
-    } catch (err) {
-      setSetupError(
-        err instanceof Error ? err.message : "No se pudo restaurar la billetera",
-      );
-    } finally {
-      setSetupBusy(false);
-    }
-  }
-
-  async function handleSaveToKeychain() {
-    if (boot.status !== "ready") return;
-    setKeychainBusy(true);
-    setKeychainError(null);
-    try {
-      const vault = await commitDeviceSecrets(boot.vault);
-      setBoot({ status: "ready", vault });
-    } catch (err) {
-      setKeychainError(
-        err instanceof Error
-          ? err.message
-          : "No se pudo guardar en el llavero.",
-      );
-    } finally {
-      setKeychainBusy(false);
-    }
-  }
 
   async function handleSetup() {
     setSetupBusy(true);
     setSetupError(null);
     try {
-      const vault = await createInitialDeviceVault();
+      const vault = await openOrCreateDeviceVault();
       setBoot({ status: "ready", vault });
       void refreshBalance(vault);
     } catch (err) {
       const message =
-        err instanceof Error ? err.message : "No se pudo crear la billetera";
+        err instanceof Error ? err.message : "No se pudo abrir la billetera";
       if (/PRF|does not support|no admite/i.test(message)) {
         setBoot({ status: "unsupported", reason: message });
       } else {
@@ -234,7 +214,7 @@ export default function App() {
 
   const handleEnsureVault = useCallback(async () => {
     if (boot.status === "ready") return boot.vault;
-    const vault = await createInitialDeviceVault();
+    const vault = await openOrCreateDeviceVault();
     setBoot({ status: "ready", vault });
     void refreshBalance(vault);
     return vault;
@@ -271,19 +251,6 @@ export default function App() {
     const vault = await markBackupCompleted(boot.vault);
     setBoot({ status: "ready", vault });
   }
-
-  const handleRestoreMettal = useCallback(async () => {
-    if (boot.status !== "ready") {
-      throw new Error("La billetera aún no está lista.");
-    }
-    const vault = await restoreMettalCredentialsFromPasskey(boot.vault);
-    if (!vault) {
-      throw new Error(
-        "No hay una API key guardada en el llavero. Escanea el QR una vez para dejarla ahí.",
-      );
-    }
-    setBoot({ status: "ready", vault });
-  }, [boot]);
 
   const handleMettalCredentials = useCallback(
     async (credentials: MettalCredentials) => {
@@ -348,11 +315,6 @@ export default function App() {
 
   const handshakeOpen = handshakeLink !== null;
   const readyVault = boot.status === "ready" ? boot.vault : null;
-  const needsKeychainSave =
-    boot.status === "ready" &&
-    !mockBiometrics &&
-    isIosDevice() &&
-    boot.vault.storage == null;
 
   return (
     <div className="mx-auto flex min-h-dvh w-full max-w-md flex-col px-5 pb-[max(2.75rem,env(safe-area-inset-bottom))] pt-[max(0.5rem,env(safe-area-inset-top))]">
@@ -399,11 +361,6 @@ export default function App() {
             busy={setupBusy}
             error={setupError}
             onSetup={() => void handleSetup()}
-            onRestore={
-              mockBiometrics || !isIosDevice()
-                ? undefined
-                : () => void handleRestoreVault()
-            }
             mockBiometrics={mockBiometrics}
           />
         ) : null}
@@ -413,37 +370,13 @@ export default function App() {
           </p>
         ) : null}
         {boot.status === "ready" && sendMode == null ? (
-          <>
-            {needsKeychainSave ? (
-              <div className="rounded-2xl border border-line bg-surface-raised px-4 py-3">
-                <p className="text-sm leading-6 text-ink">
-                  En el iPhone la app del inicio y Safari no comparten datos, y
-                  iOS puede borrarlos. Guarda la billetera y la conexión con
-                  Mettal en el llavero.
-                </p>
-                {keychainError ? (
-                  <p className="mt-2 text-sm text-ink" role="alert">
-                    {keychainError}
-                  </p>
-                ) : null}
-                <button
-                  type="button"
-                  disabled={keychainBusy}
-                  onClick={() => void handleSaveToKeychain()}
-                  className="mt-3 min-h-12 w-full rounded-2xl bg-accent px-4 font-semibold text-surface transition active:scale-[0.98] disabled:opacity-60"
-                >
-                  {keychainBusy ? "Guardando…" : "Guardar en el llavero"}
-                </button>
-              </div>
-            ) : null}
-            <HomeScreen
-              balanceAmount={homeBalance}
-              onAdd={handleAdd}
-              onSend={() => setSendMode("send")}
-              onRequest={() => setSendMode("request")}
-              onWithdraw={handleWithdraw}
-            />
-          </>
+          <HomeScreen
+            balanceAmount={homeBalance}
+            onAdd={handleAdd}
+            onSend={() => setSendMode("send")}
+            onRequest={() => setSendMode("request")}
+            onWithdraw={handleWithdraw}
+          />
         ) : null}
         {boot.status === "ready" && sendMode != null ? (
           <SendScreen
@@ -475,10 +408,11 @@ export default function App() {
           vault={boot.vault}
           onVaultUpdated={(updated) => {
             setBoot({ status: "ready", vault: updated });
-            void refreshBalance(updated);
+            void refreshBalance(updated, { invalidate: true, retries: 3 });
           }}
           onRevealSeed={handleRevealSeed}
           onBackupCompleted={handleBackupCompleted}
+          canRestoreSeed={homeBalance != null && Number(homeBalance) === 0}
         />
       ) : null}
 
@@ -492,9 +426,6 @@ export default function App() {
             onClose={() => setMettalOpen(false)}
             onContinue={handleMettalContinue}
             onCredentials={handleMettalCredentials}
-            onRestore={
-              mockBiometrics || !isIosDevice() ? undefined : handleRestoreMettal
-            }
           />
           <AcquireDepositSheet
             open={depositOpen}
@@ -527,6 +458,9 @@ export default function App() {
         vault={readyVault}
         mockBiometrics={mockBiometrics}
         onClose={() => {
+          consumedHashRef.current = "";
+          forgetPendingHandshake();
+          clearLocationHash();
           setHandshakeLink(null);
           if (boot.status === "ready") void refreshBalance(boot.vault);
         }}

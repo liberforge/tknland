@@ -39,10 +39,17 @@ function webAuthnCreateHint(err: unknown): string {
     return "La clave de acceso se canceló o bloqueó. Abre esta URL en Chrome (no en un navegador integrado), desbloquea el teléfono con biometría o PIN y usa el Administrador de contraseñas de Google.";
   }
   if (name === "NotSupportedError" || name === "SecurityError") {
-    return "Este navegador no puede crear aquí una clave de acceso. Usa Chrome en Android 14+ o Safari en iOS 18+ mediante HTTPS.";
+    return "Este navegador no puede crear aquí una clave de acceso. Hace falta biometría y HTTPS.";
   }
   if (err instanceof Error && err.message) return err.message;
   return "No se pudo crear la clave de acceso";
+}
+
+let immediateGetSupported: boolean | null = null;
+
+/** True after `isPrfSupported` when this browser can fail a passkey lookup with no UI. */
+export function canImmediateGet(): boolean {
+  return immediateGetSupported === true;
 }
 
 export async function isPrfSupported(): Promise<boolean> {
@@ -61,6 +68,7 @@ export async function isPrfSupported(): Promise<boolean> {
 
     if (capsFn) {
       const caps = await capsFn.call(PublicKeyCredential);
+      immediateGetSupported = caps.immediateGet === true;
       if (caps["extension:prf"] === true) return true;
       if (caps["extension:prf"] === false) return false;
     }
@@ -87,13 +95,6 @@ export class WebAuthnCancelled extends Error {
     super("Se canceló la confirmación biométrica.");
     this.name = "WebAuthnCancelled";
   }
-}
-
-export function isIosDevice(): boolean {
-  if (typeof navigator === "undefined") return false;
-  const ua = navigator.userAgent;
-  if (/iPad|iPhone|iPod/.test(ua)) return true;
-  return navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1;
 }
 
 function isWebAuthnCancel(err: unknown): boolean {
@@ -127,36 +128,38 @@ async function createPlatformCredential(
 ): Promise<PublicKeyCredential> {
   const challenge = crypto.getRandomValues(new Uint8Array(32));
   const userId = crypto.getRandomValues(new Uint8Array(16));
-  const credential = (await navigator.credentials.create({
-    publicKey: {
-      challenge,
-      rp: { name: "tkn.land", id: getRpId() },
-      user: {
-        id: userId,
-        name: "tkn.land",
-        displayName: "tkn.land",
-      },
-      pubKeyCredParams: [
-        { type: "public-key", alg: -7 },
-        { type: "public-key", alg: -257 },
-      ],
-      authenticatorSelection: {
-        authenticatorAttachment: "platform",
-        residentKey: "required",
-        requireResidentKey: true,
-        userVerification: "required",
-      },
-      timeout: 90_000,
-      attestation: "none",
-      // Request PRF support only; some platforms refuse eval-on-create.
-      // Derive bytes via an immediate get() below.
-      extensions: {
-        prf: {},
-        ...(requestLargeBlob
-          ? { largeBlob: { support: "preferred" } }
-          : {}),
-      } as AuthenticationExtensionsClientInputs,
+  const publicKey: PublicKeyCredentialCreationOptions = {
+    challenge,
+    rp: { name: "tkn.land", id: getRpId() },
+    user: {
+      id: userId,
+      name: "tkn.land",
+      displayName: "tkn.land",
     },
+    pubKeyCredParams: [
+      { type: "public-key", alg: -7 },
+      { type: "public-key", alg: -257 },
+    ],
+    authenticatorSelection: {
+      authenticatorAttachment: "platform",
+      residentKey: "required",
+      requireResidentKey: true,
+      userVerification: "required",
+    },
+    timeout: 90_000,
+    attestation: "none",
+    // Request PRF support only; some platforms refuse eval-on-create.
+    // Derive bytes via an immediate get() below.
+    extensions: {
+      prf: {},
+      ...(requestLargeBlob ? { largeBlob: { support: "preferred" } } : {}),
+    } as AuthenticationExtensionsClientInputs,
+  };
+  (
+    publicKey as PublicKeyCredentialCreationOptions & { hints?: string[] }
+  ).hints = ["client-device"];
+  const credential = (await navigator.credentials.create({
+    publicKey,
   })) as PublicKeyCredential | null;
 
   if (!credential) {
@@ -268,6 +271,8 @@ export async function assertPasskeyWithPrf(opts: {
 async function getPlatformCredential(opts: {
   credentialId?: Uint8Array;
   extensions: AuthenticationExtensionsClientInputs;
+  /** Fail at once, with no sheet, when this device has no passkey. */
+  immediate?: boolean;
 }): Promise<PublicKeyCredential> {
   let assertion: PublicKeyCredential | null;
   const publicKey: PublicKeyCredentialRequestOptions = {
@@ -285,11 +290,20 @@ async function getPlatformCredential(opts: {
         transports: ["internal"],
       },
     ];
+  } else {
+    (
+      publicKey as PublicKeyCredentialRequestOptions & { hints?: string[] }
+    ).hints = ["client-device"];
+  }
+  const request: CredentialRequestOptions = { publicKey };
+  if (opts.immediate) {
+    (request as CredentialRequestOptions & { uiMode?: string }).uiMode =
+      "immediate";
   }
   try {
-    assertion = (await navigator.credentials.get({
-      publicKey,
-    })) as PublicKeyCredential | null;
+    assertion = (await navigator.credentials.get(
+      request,
+    )) as PublicKeyCredential | null;
   } catch (err) {
     if (isWebAuthnCancel(err)) throw new WebAuthnCancelled();
     throw err;
@@ -299,7 +313,10 @@ async function getPlatformCredential(opts: {
 }
 
 /** Read the passkey blob. Omitting credentialId discovers the device passkey. */
-export async function readPasskeyBlob(credentialId?: Uint8Array): Promise<{
+export async function readPasskeyBlob(
+  credentialId?: Uint8Array,
+  options?: { immediate?: boolean },
+): Promise<{
   credentialId: Uint8Array;
   blob: Uint8Array | null;
 }> {
@@ -307,18 +324,61 @@ export async function readPasskeyBlob(credentialId?: Uint8Array): Promise<{
   try {
     assertion = await getPlatformCredential({
       credentialId,
+      immediate: options?.immediate === true && credentialId == null,
       extensions: {
         largeBlob: { read: true },
       } as AuthenticationExtensionsClientInputs,
     });
   } catch (err) {
     if (err instanceof WebAuthnCancelled) throw err;
-    throw new Error("No se pudo leer el llavero de este iPhone.");
+    throw new Error("No se pudo leer el llavero de este dispositivo.");
   }
 
   const raw = largeBlobResult(assertion).blob;
   const blob = raw && raw.byteLength > 0 ? new Uint8Array(raw) : null;
   return { credentialId: new Uint8Array(assertion.rawId), blob };
+}
+
+/** One prompt: read the passkey blob and evaluate PRF with the vault salt. */
+export async function readPasskeyBlobAndPrf(opts: {
+  credentialId: Uint8Array;
+  prfSalt: Uint8Array;
+}): Promise<{
+  credentialId: Uint8Array;
+  blob: Uint8Array | null;
+  prfOutput: Uint8Array | null;
+}> {
+  const credentialIdB64 = bytesToBase64Url(opts.credentialId);
+  let assertion: PublicKeyCredential;
+  try {
+    assertion = await getPlatformCredential({
+      credentialId: opts.credentialId,
+      extensions: {
+        largeBlob: { read: true },
+        prf: {
+          eval: { first: opts.prfSalt },
+          evalByCredential: {
+            [credentialIdB64]: { first: opts.prfSalt },
+          },
+        },
+      } as AuthenticationExtensionsClientInputs,
+    });
+  } catch (err) {
+    if (err instanceof WebAuthnCancelled) throw err;
+    throw new Error("No se pudo leer el llavero de este dispositivo.");
+  }
+
+  const raw = largeBlobResult(assertion).blob;
+  const blob = raw && raw.byteLength > 0 ? new Uint8Array(raw) : null;
+  const ext = assertion.getClientExtensionResults() as {
+    prf?: PrfExtensionOutputs;
+  };
+  const prfFirst = ext.prf?.results?.first;
+  return {
+    credentialId: new Uint8Array(assertion.rawId),
+    blob,
+    prfOutput: prfFirst ? new Uint8Array(prfFirst) : null,
+  };
 }
 
 export async function writePasskeyBlob(
@@ -339,7 +399,7 @@ export async function writePasskeyBlob(
     });
   } catch (err) {
     if (err instanceof WebAuthnCancelled) throw err;
-    throw new Error("No se pudo guardar en el llavero de este iPhone.");
+    throw new Error("No se pudo guardar en el llavero de este dispositivo.");
   }
 
   if (largeBlobResult(assertion).written !== true) {

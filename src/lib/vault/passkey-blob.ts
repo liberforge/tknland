@@ -1,8 +1,7 @@
 /**
  * Compact secrets stored in the passkey largeBlob (1 KB).
- * IndexedDB is not durable on iOS: Safari and a home-screen web app do not
- * share it, and iOS still deletes it. The blob lives in the keychain with
- * the passkey, so both entry points read the same Mettal keys.
+ * IndexedDB can be wiped by the browser. The blob lives in the passkey, so
+ * Android and iOS read the same seed and Mettal key after that wipe.
  */
 const VERSION = 1;
 const FLAG_METTAL = 1;

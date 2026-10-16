@@ -4,7 +4,7 @@ import { BackupFlow } from "./BackupFlow";
 import { HighlightedAddress } from "./DestinationAccount";
 import { getPublicClient } from "@/lib/evm/client";
 import { estimateNetworkCredit } from "@/lib/evm/gas-virality";
-import { withDeviceVaultSeed } from "@/lib/vault/ceremony";
+import { withDeviceVaultSeed, replaceDeviceVaultMnemonic } from "@/lib/vault/ceremony";
 import {
   ensurePrimaryEvmAccount,
   getPrimaryAddress,
@@ -23,9 +23,11 @@ type MenuSheetProps = {
   onVaultUpdated?: (vault: DeviceVaultRecord) => void;
   onRevealSeed: () => Promise<string>;
   onBackupCompleted?: () => Promise<void>;
+  /** True only when the shown PENMT balance is zero. */
+  canRestoreSeed?: boolean;
 };
 
-type MenuView = "menu" | "about" | "backup" | "network";
+type MenuView = "menu" | "about" | "backup" | "network" | "restore";
 
 type NetworkStatus =
   | { kind: "idle" }
@@ -51,6 +53,7 @@ export function MenuSheet({
   onVaultUpdated,
   onRevealSeed,
   onBackupCompleted,
+  canRestoreSeed = false,
 }: MenuSheetProps) {
   const [mounted, setMounted] = useState(open);
   const [visible, setVisible] = useState(false);
@@ -61,6 +64,9 @@ export function MenuSheet({
   );
 
   const [copiedAccount, setCopiedAccount] = useState(false);
+  const [restorePhrase, setRestorePhrase] = useState("");
+  const [restoreError, setRestoreError] = useState<string | null>(null);
+  const [restoreBusy, setRestoreBusy] = useState(false);
 
   useEffect(() => {
     let frame = 0;
@@ -73,6 +79,9 @@ export function MenuSheet({
       setNetwork({ kind: "idle" });
       setResolvedAddress(getPrimaryAddress(vault));
       setCopiedAccount(false);
+      setRestorePhrase("");
+      setRestoreError(null);
+      setRestoreBusy(false);
       // Wait until the hidden panel has been painted before transitioning it in.
       frame = requestAnimationFrame(() => {
         secondFrame = requestAnimationFrame(() => setVisible(true));
@@ -170,6 +179,24 @@ export function MenuSheet({
     }
   }
 
+  async function handleRestoreSeed() {
+    setRestoreBusy(true);
+    setRestoreError(null);
+    try {
+      const updated = await replaceDeviceVaultMnemonic(vault, restorePhrase);
+      setRestorePhrase("");
+      setResolvedAddress(getPrimaryAddress(updated));
+      onVaultUpdated?.(updated);
+      onClose();
+    } catch (err) {
+      setRestoreError(
+        err instanceof Error ? err.message : "No se pudo restaurar la frase.",
+      );
+    } finally {
+      setRestoreBusy(false);
+    }
+  }
+
   const title =
     view === "about"
       ? "Acerca de"
@@ -177,7 +204,9 @@ export function MenuSheet({
         ? "Copia de seguridad"
         : view === "network"
           ? "Recarga de Red"
-          : "Menú";
+          : view === "restore"
+            ? "Restaurar frase"
+            : "Menú";
 
   const networkStatusMessage =
     network.kind === "unlocking"
@@ -248,6 +277,16 @@ export function MenuSheet({
                 hint="Billetera tkn.land"
                 onClick={() => setView("about")}
               />
+              {canRestoreSeed ? (
+                <MenuItem
+                  label="Restaurar desde una frase secreta"
+                  hint="Reemplaza esta billetera vacía"
+                  onClick={() => {
+                    setRestoreError(null);
+                    setView("restore");
+                  }}
+                />
+              ) : null}
               {onTestUnlock ? (
                 <MenuItem
                   label="DEV: Probar desbloqueo"
@@ -376,6 +415,58 @@ export function MenuSheet({
             onBackupCompleted={onBackupCompleted}
             onBack={() => setView("menu")}
           />
+        ) : null}
+        {view === "restore" ? (
+          <>
+            <p className="text-xl font-semibold text-ink">
+              Restaurar desde una frase secreta
+            </p>
+            <div className="mt-4 space-y-4 text-sm leading-6 text-ink-muted">
+              <p>
+                Escribe las 12 o 24 palabras que guardaste, en orden y separadas
+                por espacios. Esta billetera vacía pasará a usar esa frase.
+              </p>
+              <textarea
+                value={restorePhrase}
+                onChange={(event) => {
+                  setRestorePhrase(event.target.value);
+                  setRestoreError(null);
+                }}
+                disabled={restoreBusy}
+                rows={5}
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+                placeholder="palabra1 palabra2 palabra3…"
+                className="w-full resize-none rounded-2xl border border-line bg-surface px-4 py-3 text-base leading-6 text-ink outline-none focus:border-accent"
+              />
+              {restoreError ? (
+                <p className="text-sm text-ink" role="alert">
+                  {restoreError}
+                </p>
+              ) : null}
+              <button
+                type="button"
+                disabled={restoreBusy || restorePhrase.trim().length === 0}
+                onClick={() => void handleRestoreSeed()}
+                className="min-h-14 w-full rounded-2xl bg-accent px-5 font-semibold text-surface transition active:scale-[0.98] disabled:opacity-60"
+              >
+                {restoreBusy
+                  ? mockBiometrics
+                    ? "Restaurando…"
+                    : "Confirma tu biometría…"
+                  : "Restaurar"}
+              </button>
+            </div>
+            <button
+              type="button"
+              disabled={restoreBusy}
+              onClick={() => setView("menu")}
+              className="mt-auto w-full rounded-xl border border-line bg-surface py-3 text-ink transition active:bg-line disabled:opacity-60"
+            >
+              Volver
+            </button>
+          </>
         ) : null}
       </div>
     </div>

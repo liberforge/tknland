@@ -210,3 +210,44 @@ export function clearLocationHash(): void {
   const { pathname, search } = window.location;
   window.history.replaceState(null, "", `${pathname}${search}`);
 }
+
+const PENDING_HANDSHAKE_KEY = "tknland.pendingHandshake";
+const PENDING_HANDSHAKE_MS = 5 * 60 * 1000;
+
+/** Survives a reload that drops the hash after the link was already seen. */
+export function rememberPendingHandshake(rawHash: string): void {
+  try {
+    sessionStorage.setItem(
+      PENDING_HANDSHAKE_KEY,
+      JSON.stringify({ raw: rawHash, at: Date.now() }),
+    );
+  } catch {
+    // Private mode can reject storage writes.
+  }
+}
+
+export function readPendingHandshake(): string | null {
+  try {
+    const stored = sessionStorage.getItem(PENDING_HANDSHAKE_KEY);
+    if (!stored) return null;
+    const parsed = JSON.parse(stored) as { raw?: unknown; at?: unknown };
+    if (typeof parsed.raw !== "string" || typeof parsed.at !== "number") {
+      return null;
+    }
+    if (Date.now() - parsed.at > PENDING_HANDSHAKE_MS) {
+      sessionStorage.removeItem(PENDING_HANDSHAKE_KEY);
+      return null;
+    }
+    return parsed.raw;
+  } catch {
+    return null;
+  }
+}
+
+export function forgetPendingHandshake(): void {
+  try {
+    sessionStorage.removeItem(PENDING_HANDSHAKE_KEY);
+  } catch {
+    // Ignore storage failures.
+  }
+}
