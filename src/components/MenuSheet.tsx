@@ -259,7 +259,7 @@ export function MenuSheet({
                 onClick={() => void handleRevealAccount()}
               />
               <MenuItem
-                label="Copia de seguridad"
+                label="Haz una Copia de Seguridad"
                 hint={
                   backupCompleted
                     ? "Ver frase secreta"
@@ -267,6 +267,16 @@ export function MenuSheet({
                 }
                 onClick={() => setView("backup")}
               />
+              {canRestoreSeed ? (
+                <MenuItem
+                  label="Restaurar desde una Copia de Seguridad"
+                  hint="Reemplaza esta billetera vacía"
+                  onClick={() => {
+                    setRestoreError(null);
+                    setView("restore");
+                  }}
+                />
+              ) : null}
               <MenuItem
                 label="Recarga de Red"
                 hint="Saldo de red y envíos"
@@ -277,16 +287,6 @@ export function MenuSheet({
                 hint="Billetera tkn.land"
                 onClick={() => setView("about")}
               />
-              {canRestoreSeed ? (
-                <MenuItem
-                  label="Restaurar desde una frase secreta"
-                  hint="Reemplaza esta billetera vacía"
-                  onClick={() => {
-                    setRestoreError(null);
-                    setView("restore");
-                  }}
-                />
-              ) : null}
               {onTestUnlock ? (
                 <MenuItem
                   label="DEV: Probar desbloqueo"
@@ -374,7 +374,7 @@ export function MenuSheet({
                 reclamo por daños, pérdidas o perjuicios derivados de su uso.
               </p>
               <p>
-                Tu clave privada se guarda en tu teléfono, protegida por la
+                Tu frase secreta se guarda en tu teléfono, protegida por la
                 seguridad biométrica del dispositivo. Esto es autocustodia
                 total: tkn.land no almacena ni registro de actividad, ni
                 contraseñas, ni claves. Todas las operaciones se ejecutan bajo
@@ -386,12 +386,12 @@ export function MenuSheet({
                 <span className="font-semibold text-ink">
                   cualquier token guardado en la app es irrecuperable
                 </span>
-                . Es tu responsabilidad respaldar tus claves en un lugar
-                seguro.
+                . Es tu responsabilidad hacer una copia de seguridad de tu frase secreta y guardarla
+                en un lugar seguro.
               </p>
               <p>
-                Ten cuidado: cualquiera que tenga tu clave privada puede
-                acceder a los tokens.
+                Ten cuidado: cualquiera que tenga tu frase secreta puede
+                acceder a tu billetera.
               </p>
               <p className="pt-[40px] text-right font-mono text-[0.65rem] text-ink-muted/80">
                 Build {__APP_COMMIT__}
