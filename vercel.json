@@ -1,6 +1,50 @@
 {
   "headers": [
     {
+      "source": "/",
+      "headers": [
+        {
+          "key": "Link",
+          "value": "</llms.txt>; rel=\"describedby\", </docs/what-is-tkn-land.md>; rel=\"alternate\"; type=\"text/markdown\"; hreflang=\"en\", </docs/que-es-tkn-land.html>; rel=\"alternate\"; hreflang=\"es\""
+        }
+      ]
+    },
+    {
+      "source": "/docs/(.*).md",
+      "headers": [
+        { "key": "Content-Type", "value": "text/markdown; charset=utf-8" },
+        { "key": "X-Robots-Tag", "value": "index, follow" }
+      ]
+    },
+    {
+      "source": "/docs/(.*).html",
+      "headers": [
+        { "key": "Content-Type", "value": "text/html; charset=utf-8" },
+        { "key": "X-Robots-Tag", "value": "index, follow" }
+      ]
+    },
+    {
+      "source": "/llms.txt",
+      "headers": [
+        { "key": "Content-Type", "value": "text/plain; charset=utf-8" },
+        { "key": "X-Robots-Tag", "value": "index, follow" }
+      ]
+    },
+    {
+      "source": "/llms-full.txt",
+      "headers": [
+        { "key": "Content-Type", "value": "text/plain; charset=utf-8" },
+        { "key": "X-Robots-Tag", "value": "index, follow" }
+      ]
+    },
+    {
+      "source": "/.well-known/llms.txt",
+      "headers": [
+        { "key": "Content-Type", "value": "text/plain; charset=utf-8" },
+        { "key": "X-Robots-Tag", "value": "index, follow" }
+      ]
+    },
+    {
       "source": "/(.*)",
       "headers": [
         {

@@ -1,0 +1,15 @@
+# tkn.land
+
+> tkn.land is a mobile-first self-custody wallet for the PENMT token. It is a progressive web app at https://tkn.land with no tkn.land server. Private keys stay on the phone and are unlocked with the device biometrics.
+
+People add and withdraw PENMT through their own Mettal account. They send and request PENMT by sharing a link in a chat app. tkn.land does not hold funds, passwords, private keys, or an activity log.
+
+## Documentation
+
+- [What tkn.land is](https://tkn.land/docs/what-is-tkn-land.md): Canonical public description of the product, in English
+- [Qué es tkn.land](https://tkn.land/docs/que-es-tkn-land.html): Plain-language Spanish explanation for people using the app
+- [Full text](https://tkn.land/llms-full.txt): The English description in one file, for a single fetch
+
+## Source
+
+- [Repository](https://github.com/liberforge/tknland): Application source
