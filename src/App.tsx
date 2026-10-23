@@ -23,6 +23,12 @@ import {
 import { markBackupCompleted, openOrCreateDeviceVault, verifyVaultUnlock, withDeviceVaultSeed } from "./lib/vault/ceremony";
 import type { DeviceVaultRecord } from "./lib/vault/types";
 import { getPrimaryAddress } from "./lib/vault/evm";
+import { EVM_CHAIN } from "./lib/evm/config";
+import {
+  getSimulatedAddress,
+  subscribeSimulatedAddress,
+  useSimulatedAddress,
+} from "./lib/evm/dev-address";
 import {
   disconnectMettal,
   storeMettalCredentials,
@@ -71,7 +77,7 @@ export default function App() {
       vault: DeviceVaultRecord,
       options?: { invalidate?: boolean; retries?: number },
     ) => {
-      const address = getPrimaryAddress(vault);
+      const address = getSimulatedAddress() ?? getPrimaryAddress(vault);
       if (!address) {
         setHomeBalance("0.00");
         return;
@@ -139,6 +145,13 @@ export default function App() {
       cancelled = true;
     };
   }, [refreshBalance]);
+
+  useEffect(() => {
+    if (!import.meta.env.DEV || boot.status !== "ready") return;
+    return subscribeSimulatedAddress(() => {
+      void refreshBalance(boot.vault, { invalidate: true });
+    });
+  }, [boot, refreshBalance]);
 
   useEffect(() => {
     if (boot.status !== "ready") return;
@@ -315,6 +328,8 @@ export default function App() {
 
   const handshakeOpen = handshakeLink !== null;
   const readyVault = boot.status === "ready" ? boot.vault : null;
+  const simulatedAddress = useSimulatedAddress();
+  const devChainLabel = EVM_CHAIN.id === 8453 ? "Base" : "Sepolia";
 
   return (
     <div className="mx-auto flex min-h-dvh w-full max-w-md flex-col px-5 pb-[max(2.75rem,env(safe-area-inset-bottom))] pt-[max(0.5rem,env(safe-area-inset-top))]">
@@ -323,7 +338,8 @@ export default function App() {
           {import.meta.env.DEV ? (
             <>
               <span className="mr-2 align-middle text-[0.65rem] font-semibold tracking-[0.14em] text-accent uppercase">
-                {mockBiometrics ? "Mock" : "Dev"}
+                {mockBiometrics ? "Mock" : "Dev"} · {devChainLabel}
+                {simulatedAddress ? " · sim" : ""}
               </span>
               tkn.land
             </>

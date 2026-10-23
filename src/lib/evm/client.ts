@@ -5,7 +5,7 @@ import {
   http,
   type Account,
 } from "viem";
-import { EVM_CHAIN, EVM_CHAIN_ID } from "@/lib/evm/config";
+import { EVM_CHAIN, EVM_CHAIN_ID, EVM_USE_MAINNET } from "@/lib/evm/config";
 
 /** Ordered Base mainnet RPCs (no ranking — try in order). */
 const BASE_MAINNET_RPC_URLS = [
@@ -21,9 +21,7 @@ const BASE_SEPOLIA_RPC_URLS = [
   "https://base-sepolia-rpc.publicnode.com",
 ] as const;
 
-const RPC_URLS = import.meta.env.DEV
-  ? BASE_SEPOLIA_RPC_URLS
-  : BASE_MAINNET_RPC_URLS;
+const RPC_URLS = EVM_USE_MAINNET ? BASE_MAINNET_RPC_URLS : BASE_SEPOLIA_RPC_URLS;
 
 function assertConfiguredChain(): void {
   if (EVM_CHAIN_ID !== EVM_CHAIN.id) {

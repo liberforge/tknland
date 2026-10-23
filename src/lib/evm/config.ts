@@ -15,7 +15,13 @@ export const GAS_PACK_CONTRACT_ADDRESS =
 export const PENMT_TOKEN_ADDRESS =
   "0x862a1226E6EA04E34EA3ddB4346C7a2c693E06aB" as const;
 
-/** Vite DEV → Base Sepolia; production builds → Base mainnet. */
-export const EVM_CHAIN = import.meta.env.DEV ? baseSepolia : base;
+/**
+ * Production builds use Base. Dev uses Base Sepolia unless started with
+ * `VITE_EVM_MAINNET=1` (reads the same chain as tkn.land).
+ */
+export const EVM_USE_MAINNET =
+  !import.meta.env.DEV || import.meta.env.VITE_EVM_MAINNET === "1";
+
+export const EVM_CHAIN = EVM_USE_MAINNET ? base : baseSepolia;
 
 export const EVM_CHAIN_ID = EVM_CHAIN.id;

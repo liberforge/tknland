@@ -23,7 +23,7 @@ import {
 } from "@/lib/evm/client";
 import { gasPackAbi, getPackPrice } from "@/lib/evm/gas-pack";
 import { HOP_SEED_TARGET, planSendGas } from "@/lib/evm/gas-virality";
-import { parsePenmtMajorToRaw } from "@/lib/evm/penmt";
+import { formatPenmtRaw, parsePenmtMajorToRaw } from "@/lib/evm/penmt";
 
 export type PenmtTransferResult = {
   transferTxHash: Hash;
@@ -592,6 +592,8 @@ export async function getPenmtFeePreview(input: {
   needsPack: boolean;
   canSelfServePack: boolean;
   canAfford: boolean;
+  /** Sender PENMT balance, major units with 2 decimals. */
+  balanceFormatted: string;
   gasNote: string;
   packCostFormatted: string | null;
   totalCostFormatted: string | null;
@@ -644,6 +646,7 @@ export async function getPenmtFeePreview(input: {
     needsPack,
     canSelfServePack: plan.canSelfServePack,
     canAfford,
+    balanceFormatted: formatPenmtRaw(penmtBalance, decimals),
     gasNote,
     packCostFormatted,
     totalCostFormatted,

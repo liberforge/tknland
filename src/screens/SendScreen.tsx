@@ -10,6 +10,7 @@ import {
 import { createPaymentIntent } from "@/lib/protocol/intents";
 import { openWhatsApp, shareText } from "@/lib/share";
 import { getPenmtBalance } from "@/lib/evm/penmt";
+import { useSimulatedAddress } from "@/lib/evm/dev-address";
 import { withDeviceVaultSeed } from "@/lib/vault/ceremony";
 import {
   ensurePrimaryEvmAccount,
@@ -45,6 +46,7 @@ export function SendScreen({
   onBack,
   onVaultUpdated,
 }: SendScreenProps) {
+  const simulatedAddress = useSimulatedAddress();
   const [step, setStep] = useState<Step>({ kind: "amount" });
   const [amountInput, setAmountInput] = useState("");
   const [amountError, setAmountError] = useState<string | null>(null);
@@ -61,7 +63,7 @@ export function SendScreen({
 
   useEffect(() => {
     if (!vault) return;
-    const address = getPrimaryAddress(vault);
+    const address = simulatedAddress ?? getPrimaryAddress(vault);
     if (!address) {
       setBalanceFormatted("0.00");
       return;
@@ -79,7 +81,7 @@ export function SendScreen({
     return () => {
       cancelled = true;
     };
-  }, [vault]);
+  }, [vault, simulatedAddress]);
 
   useEffect(() => {
     if (mode !== "request" || !vault) {

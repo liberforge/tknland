@@ -10,6 +10,11 @@ import {
   getPrimaryAddress,
 } from "@/lib/vault/evm";
 import type { DeviceVaultRecord } from "@/lib/vault/types";
+import {
+  getSimulatedAddress,
+  setSimulatedAddress,
+  useSimulatedAddress,
+} from "@/lib/evm/dev-address";
 
 type MenuSheetProps = {
   open: boolean;
@@ -27,7 +32,7 @@ type MenuSheetProps = {
   canRestoreSeed?: boolean;
 };
 
-type MenuView = "menu" | "about" | "backup" | "network" | "restore";
+type MenuView = "menu" | "about" | "backup" | "network" | "restore" | "simulate";
 
 type NetworkStatus =
   | { kind: "idle" }
@@ -67,6 +72,9 @@ export function MenuSheet({
   const [restorePhrase, setRestorePhrase] = useState("");
   const [restoreError, setRestoreError] = useState<string | null>(null);
   const [restoreBusy, setRestoreBusy] = useState(false);
+  const simulatedAddress = useSimulatedAddress();
+  const [simulateInput, setSimulateInput] = useState("");
+  const [simulateError, setSimulateError] = useState<string | null>(null);
 
   useEffect(() => {
     let frame = 0;
@@ -108,7 +116,10 @@ export function MenuSheet({
 
     void (async () => {
       try {
-        let address = resolvedAddress ?? getPrimaryAddress(vault);
+        let address =
+          getSimulatedAddress() ??
+          resolvedAddress ??
+          getPrimaryAddress(vault);
 
         if (!address) {
           setNetwork({ kind: "unlocking" });
@@ -146,12 +157,12 @@ export function MenuSheet({
     };
     // onVaultUpdated is intentionally omitted (inline from parent).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, view, vault, resolvedAddress]);
+  }, [open, view, vault, resolvedAddress, simulatedAddress]);
 
   if (!mounted) return null;
 
   const displayAddress =
-    resolvedAddress ?? getPrimaryAddress(vault);
+    simulatedAddress ?? resolvedAddress ?? getPrimaryAddress(vault);
 
   async function handleRevealAccount() {
     let address = displayAddress;
@@ -206,7 +217,9 @@ export function MenuSheet({
           ? "Recarga de Red"
           : view === "restore"
             ? "Restaurar frase"
-            : "Menú";
+            : view === "simulate"
+              ? "Simular dirección"
+              : "Menú";
 
   const networkStatusMessage =
     network.kind === "unlocking"
@@ -287,6 +300,21 @@ export function MenuSheet({
                 hint="Billetera tkn.land"
                 onClick={() => setView("about")}
               />
+              {import.meta.env.DEV ? (
+                <MenuItem
+                  label="DEV: Simular dirección"
+                  hint={
+                    simulatedAddress
+                      ? `Leyendo ${simulatedAddress.slice(0, 6)}…${simulatedAddress.slice(-4)}. No firma.`
+                      : "Lee saldos y el envío de otra cuenta"
+                  }
+                  onClick={() => {
+                    setSimulateInput(getSimulatedAddress() ?? "");
+                    setSimulateError(null);
+                    setView("simulate");
+                  }}
+                />
+              ) : null}
               {onTestUnlock ? (
                 <MenuItem
                   label="DEV: Probar desbloqueo"
@@ -415,6 +443,75 @@ export function MenuSheet({
             onBackupCompleted={onBackupCompleted}
             onBack={() => setView("menu")}
           />
+        ) : null}
+        {view === "simulate" ? (
+          <>
+            <p className="text-xl font-semibold text-ink">Simular dirección</p>
+            <form
+              className="mt-4 space-y-4 text-sm leading-6 text-ink-muted"
+              onSubmit={(event) => {
+                event.preventDefault();
+                try {
+                  setSimulatedAddress(simulateInput);
+                  setSimulateError(null);
+                  onClose();
+                } catch (err) {
+                  setSimulateError(
+                    err instanceof Error ? err.message : "Dirección inválida.",
+                  );
+                }
+              }}
+            >
+              <p>
+                El saldo y la pantalla de envío leen esta cuenta en Base. La
+                billetera de este dispositivo sigue firmando la suya.
+              </p>
+              <input
+                value={simulateInput}
+                onChange={(event) => {
+                  setSimulateInput(event.target.value);
+                  setSimulateError(null);
+                }}
+                autoCapitalize="none"
+                autoCorrect="off"
+                spellCheck={false}
+                placeholder="0x…"
+                className="w-full rounded-2xl border border-line bg-surface px-4 py-3 font-mono text-xs text-ink outline-none focus:border-accent"
+              />
+              {simulateError ? (
+                <p className="text-sm text-ink" role="alert">
+                  {simulateError}
+                </p>
+              ) : null}
+              <button
+                type="submit"
+                className="min-h-14 w-full rounded-2xl bg-accent px-5 font-semibold text-surface transition active:scale-[0.98]"
+              >
+                Usar esta dirección
+              </button>
+              {simulatedAddress ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSimulatedAddress(null);
+                    setSimulateInput("");
+                    setSimulateError(null);
+                    onClose();
+                  }}
+                  className="min-h-14 w-full rounded-2xl border border-line bg-surface px-5 font-semibold text-ink"
+                >
+                  Quitar simulación
+                </button>
+              ) : null}
+            </form>
+            <button
+              type="button"
+              onClick={() => setView("menu")}
+              className="mt-auto w-full rounded-xl border border-line bg-surface py-3 text-ink transition active:bg-line"
+            >
+              Volver
+            </button>
+          </>
         ) : null}
         {view === "restore" ? (
           <>

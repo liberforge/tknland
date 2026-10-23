@@ -24,6 +24,10 @@ import {
   ensurePrimaryEvmAccount,
   getPrimaryAddress,
 } from "@/lib/vault/evm";
+import {
+  getSimulatedAddress,
+  useSimulatedAddress,
+} from "@/lib/evm/dev-address";
 import type { DeviceVaultRecord } from "@/lib/vault/types";
 import { DestinationAccount } from "@/components/DestinationAccount";
 
@@ -67,6 +71,7 @@ type Step =
       totalCostFormatted: string | null;
       needsPack: boolean;
       canAfford: boolean;
+      balanceFormatted: string | null;
       matchedIntent: boolean;
     }
   | { kind: "already-paid"; amount: string; txHash?: Hash }
@@ -94,7 +99,9 @@ export function HandshakeSheet({
   const [step, setStep] = useState<Step>({ kind: "idle" });
   const onBalanceRefreshRef = useRef(onBalanceRefresh);
   onBalanceRefreshRef.current = onBalanceRefresh;
-  const senderAddress = vault ? getPrimaryAddress(vault) : null;
+  const simulatedAddress = useSimulatedAddress();
+  const senderAddress =
+    simulatedAddress ?? (vault ? getPrimaryAddress(vault) : null);
 
   useEffect(() => {
     if (!open || !link) {
@@ -196,6 +203,7 @@ export function HandshakeSheet({
       let totalCostFormatted: string | null = null;
       let needsPack = false;
       let canAfford = true;
+      let balanceFormatted: string | null = null;
       if (senderAddress) {
         try {
           const fee = await getPenmtFeePreview({
@@ -209,6 +217,7 @@ export function HandshakeSheet({
           totalCostFormatted = fee.totalCostFormatted;
           needsPack = fee.needsPack;
           canAfford = fee.canAfford;
+          balanceFormatted = fee.balanceFormatted;
         } catch {
           feeFormatted = null;
           gasNote = null;
@@ -216,6 +225,7 @@ export function HandshakeSheet({
           totalCostFormatted = null;
           needsPack = false;
           canAfford = true;
+          balanceFormatted = null;
         }
       }
 
@@ -230,6 +240,7 @@ export function HandshakeSheet({
         totalCostFormatted,
         needsPack,
         canAfford,
+        balanceFormatted,
         matchedIntent: match.kind === "match",
       });
     } catch (err) {
@@ -356,6 +367,20 @@ export function HandshakeSheet({
       setStep({
         kind: "error",
         message: "Necesitas una billetera para enviar.",
+      });
+      return;
+    }
+
+    const simulated = getSimulatedAddress();
+    const signingAddress = getPrimaryAddress(vault);
+    if (
+      simulated &&
+      simulated.toLowerCase() !== signingAddress?.toLowerCase()
+    ) {
+      setStep({
+        kind: "error",
+        message:
+          "Esta vista simula otra dirección y no puede firmar. Quita la simulación en el menú para enviar.",
       });
       return;
     }
@@ -647,6 +672,15 @@ export function HandshakeSheet({
             {!step.canAfford ? (
               <p className="mt-2 text-sm font-semibold text-ink">
                 No tienes saldo suficiente.
+                {step.balanceFormatted != null
+                  ? ` Tu saldo es: ${step.balanceFormatted} PENMT.`
+                  : null}
+              </p>
+            ) : null}
+            {simulatedAddress ? (
+              <p className="mt-3 text-sm text-ink-muted">
+                Vista simulada de {simulatedAddress}. Confirmar no firma esta
+                cuenta.
               </p>
             ) : null}
             {!vault ? (
