@@ -86,8 +86,15 @@ export async function isPrfSupported(): Promise<boolean> {
 export type PasskeyWithPrf = {
   credentialId: Uint8Array;
   prfOutput: Uint8Array;
-  /** `null` when the authenticator did not say. */
-  largeBlobSupported: boolean | null;
+  /** `PublicKeyCredential.toJSON()` from the create ceremony. */
+  registration: Record<string, unknown>;
+};
+
+export type PrfAssertion = {
+  credentialId: Uint8Array;
+  prfOutput: Uint8Array;
+  /** `PublicKeyCredential.toJSON()` from the get ceremony. */
+  assertion: Record<string, unknown>;
 };
 
 export class WebAuthnCancelled extends Error {
@@ -110,31 +117,36 @@ function standaloneBuffer(bytes: Uint8Array): ArrayBuffer {
   return copy.buffer;
 }
 
-type LargeBlobOutputs = {
-  supported?: boolean;
-  blob?: ArrayBuffer;
-  written?: boolean;
-};
+function passkeyAccountName(date = new Date()): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `tkn.land-${year}-${month}-${day}`;
+}
 
-function largeBlobResult(credential: PublicKeyCredential): LargeBlobOutputs {
-  const ext = credential.getClientExtensionResults() as {
-    largeBlob?: LargeBlobOutputs;
+function credentialJson(credential: PublicKeyCredential): Record<string, unknown> {
+  const withJson = credential as PublicKeyCredential & {
+    toJSON?: () => Record<string, unknown>;
   };
-  return ext.largeBlob ?? {};
+  if (typeof withJson.toJSON !== "function") {
+    throw new Error("Este navegador no puede enviar la clave de acceso.");
+  }
+  return withJson.toJSON() as unknown as Record<string, unknown>;
 }
 
 async function createPlatformCredential(
-  requestLargeBlob: boolean,
+  prfSalt: Uint8Array,
+  challenge: Uint8Array,
 ): Promise<PublicKeyCredential> {
-  const challenge = crypto.getRandomValues(new Uint8Array(32));
   const userId = crypto.getRandomValues(new Uint8Array(16));
+  const accountName = passkeyAccountName();
   const publicKey: PublicKeyCredentialCreationOptions = {
-    challenge,
+    challenge: standaloneBuffer(challenge),
     rp: { name: "tkn.land", id: getRpId() },
     user: {
       id: userId,
-      name: "tkn.land",
-      displayName: "tkn.land",
+      name: accountName,
+      displayName: accountName,
     },
     pubKeyCredParams: [
       { type: "public-key", alg: -7 },
@@ -148,11 +160,8 @@ async function createPlatformCredential(
     },
     timeout: 90_000,
     attestation: "none",
-    // Request PRF support only; some platforms refuse eval-on-create.
-    // Derive bytes via an immediate get() below.
     extensions: {
-      prf: {},
-      ...(requestLargeBlob ? { largeBlob: { support: "preferred" } } : {}),
+      prf: { eval: { first: prfSalt } },
     } as AuthenticationExtensionsClientInputs,
   };
   (
@@ -170,27 +179,24 @@ async function createPlatformCredential(
 
 export async function createPasskeyWithPrf(
   prfSalt: Uint8Array,
+  challenge: Uint8Array,
 ): Promise<PasskeyWithPrf> {
   if (isMockBiometrics()) {
     return {
       credentialId: mockCredentialId(),
       prfOutput: await mockPrfOutput(prfSalt),
-      largeBlobSupported: false,
+      registration: { mock: true },
     };
   }
 
   let credential: PublicKeyCredential;
   try {
-    credential = await createPlatformCredential(true);
+    credential = await createPlatformCredential(prfSalt, challenge);
   } catch (err) {
     if (err instanceof WebAuthnCancelled || isWebAuthnCancel(err)) {
-      throw new Error(webAuthnCreateHint(err));
+      throw new WebAuthnCancelled();
     }
-    try {
-      credential = await createPlatformCredential(false);
-    } catch (retryErr) {
-      throw new Error(webAuthnCreateHint(retryErr));
-    }
+    throw new Error(webAuthnCreateHint(err));
   }
 
   const ext = credential.getClientExtensionResults() as {
@@ -201,86 +207,58 @@ export async function createPasskeyWithPrf(
   }
 
   const credentialId = new Uint8Array(credential.rawId);
-  const reportedSupport = largeBlobResult(credential).supported;
-  const largeBlobSupported =
-    typeof reportedSupport === "boolean" ? reportedSupport : null;
+  const registration = credentialJson(credential);
   const fromCreate = ext.prf?.results?.first;
   if (fromCreate) {
     return {
       credentialId,
       prfOutput: new Uint8Array(fromCreate),
-      largeBlobSupported,
+      registration,
     };
   }
 
   // Android / some browsers only return PRF output on assert, not create.
-  const prfOutput = await assertPasskeyWithPrf({ credentialId, prfSalt });
-  return { credentialId, prfOutput, largeBlobSupported };
+  const asserted = await assertPasskeyWithPrf({ credentialId, prfSalt });
+  return {
+    credentialId,
+    prfOutput: asserted.prfOutput,
+    registration,
+  };
 }
 
 export async function assertPasskeyWithPrf(opts: {
-  credentialId: Uint8Array;
-  prfSalt: Uint8Array;
-}): Promise<Uint8Array> {
-  if (isMockBiometrics()) {
-    return mockPrfOutput(opts.prfSalt);
-  }
-
-  const challenge = crypto.getRandomValues(new Uint8Array(32));
-  const credentialIdB64 = bytesToBase64Url(opts.credentialId);
-
-  const assertion = (await navigator.credentials.get({
-    publicKey: {
-      challenge,
-      rpId: getRpId(),
-      allowCredentials: [
-        {
-          type: "public-key",
-          id: opts.credentialId,
-          transports: ["internal"],
-        },
-      ],
-      userVerification: "required",
-      timeout: 90_000,
-      extensions: {
-        prf: {
-          eval: { first: opts.prfSalt },
-          evalByCredential: {
-            [credentialIdB64]: { first: opts.prfSalt },
-          },
-        },
-      } as AuthenticationExtensionsClientInputs,
-    },
-  })) as PublicKeyCredential | null;
-
-  if (!assertion) {
-    throw new Error("Se canceló el desbloqueo biométrico");
-  }
-
-  const ext = assertion.getClientExtensionResults() as {
-    prf?: PrfExtensionOutputs;
-  };
-  const prfFirst = ext.prf?.results?.first;
-  if (!prfFirst) {
-    throw new Error("Falta el resultado PRF de la clave de acceso");
-  }
-
-  return new Uint8Array(prfFirst);
-}
-
-async function getPlatformCredential(opts: {
   credentialId?: Uint8Array;
-  extensions: AuthenticationExtensionsClientInputs;
+  prfSalt: Uint8Array;
+  challenge?: Uint8Array;
   /** Fail at once, with no sheet, when this device has no passkey. */
   immediate?: boolean;
-}): Promise<PublicKeyCredential> {
-  let assertion: PublicKeyCredential | null;
+}): Promise<PrfAssertion> {
+  if (isMockBiometrics()) {
+    return {
+      credentialId: opts.credentialId ?? mockCredentialId(),
+      prfOutput: await mockPrfOutput(opts.prfSalt),
+      assertion: { mock: true },
+    };
+  }
+
+  const challenge = opts.challenge ?? crypto.getRandomValues(new Uint8Array(32));
   const publicKey: PublicKeyCredentialRequestOptions = {
-    challenge: crypto.getRandomValues(new Uint8Array(32)),
+    challenge: standaloneBuffer(challenge),
     rpId: getRpId(),
     userVerification: "required",
     timeout: 90_000,
-    extensions: opts.extensions,
+    extensions: {
+      prf: {
+        eval: { first: opts.prfSalt },
+        ...(opts.credentialId
+          ? {
+              evalByCredential: {
+                [bytesToBase64Url(opts.credentialId)]: { first: opts.prfSalt },
+              },
+            }
+          : {}),
+      },
+    } as AuthenticationExtensionsClientInputs,
   };
   if (opts.credentialId) {
     publicKey.allowCredentials = [
@@ -295,116 +273,35 @@ async function getPlatformCredential(opts: {
       publicKey as PublicKeyCredentialRequestOptions & { hints?: string[] }
     ).hints = ["client-device"];
   }
+
   const request: CredentialRequestOptions = { publicKey };
-  if (opts.immediate) {
+  if (opts.immediate && !opts.credentialId) {
     (request as CredentialRequestOptions & { uiMode?: string }).uiMode =
       "immediate";
   }
+
+  let assertion: PublicKeyCredential | null;
   try {
-    assertion = (await navigator.credentials.get(
-      request,
-    )) as PublicKeyCredential | null;
+    assertion = (await navigator.credentials.get(request)) as PublicKeyCredential | null;
   } catch (err) {
     if (isWebAuthnCancel(err)) throw new WebAuthnCancelled();
     throw err;
   }
   if (!assertion) throw new WebAuthnCancelled();
-  return assertion;
-}
 
-/** Read the passkey blob. Omitting credentialId discovers the device passkey. */
-export async function readPasskeyBlob(
-  credentialId?: Uint8Array,
-  options?: { immediate?: boolean },
-): Promise<{
-  credentialId: Uint8Array;
-  blob: Uint8Array | null;
-}> {
-  let assertion: PublicKeyCredential;
-  try {
-    assertion = await getPlatformCredential({
-      credentialId,
-      immediate: options?.immediate === true && credentialId == null,
-      extensions: {
-        largeBlob: { read: true },
-      } as AuthenticationExtensionsClientInputs,
-    });
-  } catch (err) {
-    if (err instanceof WebAuthnCancelled) throw err;
-    throw new Error("No se pudo leer el llavero de este dispositivo.");
-  }
-
-  const raw = largeBlobResult(assertion).blob;
-  const blob = raw && raw.byteLength > 0 ? new Uint8Array(raw) : null;
-  return { credentialId: new Uint8Array(assertion.rawId), blob };
-}
-
-/** One prompt: read the passkey blob and evaluate PRF with the vault salt. */
-export async function readPasskeyBlobAndPrf(opts: {
-  credentialId: Uint8Array;
-  prfSalt: Uint8Array;
-}): Promise<{
-  credentialId: Uint8Array;
-  blob: Uint8Array | null;
-  prfOutput: Uint8Array | null;
-}> {
-  const credentialIdB64 = bytesToBase64Url(opts.credentialId);
-  let assertion: PublicKeyCredential;
-  try {
-    assertion = await getPlatformCredential({
-      credentialId: opts.credentialId,
-      extensions: {
-        largeBlob: { read: true },
-        prf: {
-          eval: { first: opts.prfSalt },
-          evalByCredential: {
-            [credentialIdB64]: { first: opts.prfSalt },
-          },
-        },
-      } as AuthenticationExtensionsClientInputs,
-    });
-  } catch (err) {
-    if (err instanceof WebAuthnCancelled) throw err;
-    throw new Error("No se pudo leer el llavero de este dispositivo.");
-  }
-
-  const raw = largeBlobResult(assertion).blob;
-  const blob = raw && raw.byteLength > 0 ? new Uint8Array(raw) : null;
   const ext = assertion.getClientExtensionResults() as {
     prf?: PrfExtensionOutputs;
   };
   const prfFirst = ext.prf?.results?.first;
+  if (!prfFirst) {
+    throw new Error("Falta el resultado PRF de la clave de acceso");
+  }
+
   return {
     credentialId: new Uint8Array(assertion.rawId),
-    blob,
-    prfOutput: prfFirst ? new Uint8Array(prfFirst) : null,
+    prfOutput: new Uint8Array(prfFirst),
+    assertion: credentialJson(assertion),
   };
-}
-
-export async function writePasskeyBlob(
-  credentialId: Uint8Array,
-  blob: Uint8Array,
-): Promise<void> {
-  if (blob.byteLength > 1024) {
-    throw new Error("Las credenciales no entran en el llavero de este dispositivo.");
-  }
-
-  let assertion: PublicKeyCredential;
-  try {
-    assertion = await getPlatformCredential({
-      credentialId,
-      extensions: {
-        largeBlob: { write: new Uint8Array(blob) },
-      } as AuthenticationExtensionsClientInputs,
-    });
-  } catch (err) {
-    if (err instanceof WebAuthnCancelled) throw err;
-    throw new Error("No se pudo guardar en el llavero de este dispositivo.");
-  }
-
-  if (largeBlobResult(assertion).written !== true) {
-    throw new Error("Este dispositivo no confirmó el guardado en el llavero.");
-  }
 }
 
 export function parseCredentialId(stored: string): Uint8Array {

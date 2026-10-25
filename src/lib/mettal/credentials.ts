@@ -1,7 +1,4 @@
-import { bytesToBase64Url, wipeBytes } from "@/lib/bytes";
-import { decryptUtf8, encryptUtf8 } from "@/lib/crypto/aes";
 import { withDeviceVaultSecrets } from "@/lib/vault/ceremony";
-import { commitDeviceSecrets } from "@/lib/vault/passkey-store";
 import type { DeviceVaultRecord } from "@/lib/vault/types";
 
 /** Dev uses Vite proxy (`/mettal-api` → staging) to avoid CORS on localhost. */
@@ -49,49 +46,33 @@ export async function storeMettalCredentials(
   vault: DeviceVaultRecord,
   credentials: MettalCredentials,
 ): Promise<DeviceVaultRecord> {
-  const updated = await withDeviceVaultSecrets(
+  return withDeviceVaultSecrets(
     vault,
-    async ({ aesKey, seedIv, seedCiphertext }) => {
-      const plaintext = JSON.stringify(credentials);
-      const encrypted = await encryptUtf8(plaintext, aesKey);
-
-      try {
-        return {
-          ...vault,
-          iv: bytesToBase64Url(seedIv),
-          ciphertext: bytesToBase64Url(seedCiphertext),
-          mettalConnected: true,
-          mettalCredentials: {
-            iv: bytesToBase64Url(encrypted.iv),
-            ciphertext: bytesToBase64Url(encrypted.ciphertext),
-          },
-        };
-      } finally {
-        wipeBytes(encrypted.iv);
-        wipeBytes(encrypted.ciphertext);
-      }
-    },
+    ({ payload, commit }) =>
+      commit({
+        ...payload,
+        mettal: {
+          type: "mettal.api_key",
+          key: credentials.key,
+          secret: credentials.secret,
+        },
+      }),
+    { write: true },
   );
-  return commitDeviceSecrets(updated);
 }
 
 export async function disconnectMettal(
   vault: DeviceVaultRecord,
 ): Promise<DeviceVaultRecord> {
-  const updated = await withDeviceVaultSecrets(
+  return withDeviceVaultSecrets(
     vault,
-    async ({ seedIv, seedCiphertext }) => {
-      const next: DeviceVaultRecord = {
-        ...vault,
-        iv: bytesToBase64Url(seedIv),
-        ciphertext: bytesToBase64Url(seedCiphertext),
-        mettalConnected: false,
-      };
-      delete next.mettalCredentials;
-      return next;
+    ({ payload, commit }) => {
+      const next = { ...payload };
+      delete next.mettal;
+      return commit(next);
     },
+    { write: true },
   );
-  return commitDeviceSecrets(updated, { replaceMettalCredentials: true });
 }
 
 export async function withMettalCredentials<T>(
@@ -106,14 +87,9 @@ export async function withMettalCredentials<T>(
   let credentials: MettalCredentials | null = null;
 
   try {
-    return await withDeviceVaultSecrets(vault, async (secrets) => {
-      if (!secrets.mettalIv || !secrets.mettalCiphertext) {
-        throw new Error("Mettal no está conectado.");
-      }
-      plaintext = await decryptUtf8(
-        { iv: secrets.mettalIv, ciphertext: secrets.mettalCiphertext },
-        secrets.aesKey,
-      );
+    return await withDeviceVaultSecrets(vault, async ({ payload }) => {
+      if (!payload.mettal) throw new Error("Mettal no está conectado.");
+      plaintext = JSON.stringify(payload.mettal);
       credentials = parseMettalQrPayload(plaintext);
       return await useCredentials(credentials);
     });
@@ -140,18 +116,10 @@ export async function withMettalCredentialsAndSeed<T>(
   let credentials: MettalCredentials | null = null;
 
   try {
-    return await withDeviceVaultSecrets(vault, async (secrets) => {
-      if (!secrets.mettalIv || !secrets.mettalCiphertext) {
-        throw new Error("Mettal no está conectado.");
-      }
-      mnemonic = await decryptUtf8(
-        { iv: secrets.seedIv, ciphertext: secrets.seedCiphertext },
-        secrets.aesKey,
-      );
-      credPlaintext = await decryptUtf8(
-        { iv: secrets.mettalIv, ciphertext: secrets.mettalCiphertext },
-        secrets.aesKey,
-      );
+    return await withDeviceVaultSecrets(vault, async ({ payload }) => {
+      if (!payload.mettal) throw new Error("Mettal no está conectado.");
+      mnemonic = payload.seed;
+      credPlaintext = JSON.stringify(payload.mettal);
       credentials = parseMettalQrPayload(credPlaintext);
       return await use({ credentials, mnemonic });
     });

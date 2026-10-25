@@ -14,12 +14,16 @@ import {
   recordCompletedPay,
 } from "@/lib/protocol/intents";
 import { openWhatsApp, shareText } from "@/lib/share";
+import { WebAuthnCancelled } from "@/lib/webauthn/prf";
+import {
+  AccountChoiceRequired,
+  withDeviceVaultSeed,
+} from "@/lib/vault/ceremony";
 import {
   getPenmtFeePreview,
   sendPenmtWithFee,
   type SendProgress,
 } from "@/lib/evm/transfer";
-import { withDeviceVaultSeed } from "@/lib/vault/ceremony";
 import {
   ensurePrimaryEvmAccount,
   getPrimaryAddress,
@@ -37,8 +41,8 @@ type HandshakeSheetProps = {
   vault: DeviceVaultRecord | null;
   mockBiometrics?: boolean;
   onClose: () => void;
-  /** Create vault when accepting an invite without one. */
-  onEnsureVault: () => Promise<DeviceVaultRecord>;
+  /** Open or create the vault when accepting an invite without one. */
+  onEnsureVault: (mode?: "restore" | "create") => Promise<DeviceVaultRecord>;
   onVaultUpdated?: (vault: DeviceVaultRecord) => void;
   onBalanceRefresh?: () => void;
 };
@@ -47,7 +51,7 @@ type ResolvedPayLink = Omit<PayLink, "amount"> & { amount: string };
 
 type Step =
   | { kind: "idle" }
-  | { kind: "invite"; amount: string; id: string }
+  | { kind: "invite"; amount: string; id: string; needsChoice?: boolean; via?: "share" | "whatsapp" }
   | { kind: "working"; message: string }
   | {
       kind: "pay-ready";
@@ -277,7 +281,10 @@ export function HandshakeSheet({
     });
   }
 
-  async function handleAcceptInvite(via: "share" | "whatsapp" = "share") {
+  async function handleAcceptInvite(
+    via: "share" | "whatsapp" = "share",
+    mode?: "restore" | "create",
+  ) {
     if (link?.type !== "invite") return;
     setStep({
       kind: "working",
@@ -289,7 +296,7 @@ export function HandshakeSheet({
     });
 
     try {
-      const readyVault = vault ?? (await onEnsureVault());
+      const readyVault = vault ?? (await onEnsureVault(mode));
       onVaultUpdated?.(readyVault);
       const { address } = await resolveReceiveAddress(readyVault);
       const url = buildPayLink({
@@ -331,6 +338,19 @@ export function HandshakeSheet({
         shareMethod: result.method,
       });
     } catch (err) {
+      if (
+        err instanceof AccountChoiceRequired ||
+        err instanceof WebAuthnCancelled
+      ) {
+        setStep({
+          kind: "invite",
+          amount: link.amount,
+          id: link.id,
+          needsChoice: true,
+          via,
+        });
+        return;
+      }
       setStep({
         kind: "error",
         message:
@@ -517,25 +537,50 @@ export function HandshakeSheet({
                 PENMT
               </span>
             </p>
-            {!vault ? (
+            {!vault && step.needsChoice ? (
+              <p className="mt-4 text-sm leading-6 text-ink-muted">
+                Crea una billetera nueva, o abre la de este dispositivo.
+              </p>
+            ) : !vault ? (
               <p className="mt-4 text-sm leading-6 text-ink-muted">
                 Te pediremos la biometría para continuar.
               </p>
             ) : null}
-            <button
-              type="button"
-              onClick={() => void handleAcceptInvite("whatsapp")}
-              className="mt-8 min-h-14 rounded-2xl bg-[#25D366] px-5 py-3 font-semibold text-[#0b141a] transition active:scale-[0.99]"
-            >
-              Responder via WhatsApp
-            </button>
-            <button
-              type="button"
-              onClick={() => void handleAcceptInvite("share")}
-              className="mt-3 min-h-14 rounded-2xl bg-accent px-5 py-3 font-semibold text-surface transition active:scale-[0.99]"
-            >
-              Responder por otro medio
-            </button>
+            {!vault && step.needsChoice ? (
+              <>
+                <button
+                  type="button"
+                  onClick={() => void handleAcceptInvite(step.via ?? "whatsapp", "create")}
+                  className="mt-8 min-h-14 rounded-2xl bg-accent px-5 py-3 font-semibold text-surface transition active:scale-[0.99]"
+                >
+                  Crear nueva cuenta
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleAcceptInvite(step.via ?? "whatsapp", "restore")}
+                  className="mt-3 min-h-14 rounded-2xl border border-line bg-surface-raised px-5 py-3 font-semibold text-ink transition active:scale-[0.99]"
+                >
+                  Ya tengo cuenta
+                </button>
+              </>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  onClick={() => void handleAcceptInvite("whatsapp")}
+                  className="mt-8 min-h-14 rounded-2xl bg-[#25D366] px-5 py-3 font-semibold text-[#0b141a] transition active:scale-[0.99]"
+                >
+                  Responder via WhatsApp
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleAcceptInvite("share")}
+                  className="mt-3 min-h-14 rounded-2xl bg-accent px-5 py-3 font-semibold text-surface transition active:scale-[0.99]"
+                >
+                  Responder por otro medio
+                </button>
+              </>
+            )}
             <button
               type="button"
               onClick={onClose}
@@ -812,12 +857,12 @@ export function HandshakeSheet({
 
         {step.kind === "error" ? (
           <>
-            <p
-              className="mt-6 rounded-2xl border border-danger/50 bg-danger/10 p-4 text-sm text-ink"
+            <pre
+              className="mt-6 max-h-64 overflow-auto whitespace-pre-wrap break-all rounded-2xl border border-danger/50 bg-danger/10 p-4 text-left font-mono text-xs leading-5 text-ink select-text"
               role="alert"
             >
               {step.message}
-            </p>
+            </pre>
             <button
               type="button"
               onClick={onClose}

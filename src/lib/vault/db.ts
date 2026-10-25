@@ -155,16 +155,17 @@ export type PutVaultOptions = {
 };
 
 /**
- * The passkey blob is the copy that survives the browser deleting site data.
- * IndexedDB then keeps the address, the salt, and whether Mettal is connected.
+ * IndexedDB may keep the encrypted blob as a cache. The separate Mettal field
+ * is an older copy; the blob already contains that key.
  */
 function withoutDuplicatedSecrets(vault: DeviceVaultRecord): DeviceVaultRecord {
-  if (isMockBiometrics() || vault.storage !== "largeBlob") return vault;
-  const mettalConnected =
-    vault.mettalConnected === true || vault.mettalCredentials != null;
-  const next: DeviceVaultRecord = { ...vault, mettalConnected };
-  delete next.iv;
-  delete next.ciphertext;
+  if (isMockBiometrics() || vault.storage !== "server" || !vault.mettalCredentials) {
+    return vault;
+  }
+  const next: DeviceVaultRecord = {
+    ...vault,
+    mettalConnected: vault.mettalConnected === true || vault.mettalCredentials != null,
+  };
   delete next.mettalCredentials;
   return next;
 }
@@ -204,6 +205,23 @@ export async function putVault(
   return next;
 }
 
+/** Dev helper: drop the site database the way Safari does after inactivity. */
+export function deleteAppDatabase(): Promise<void> {
+  return enqueue(
+    () =>
+      new Promise((resolve, reject) => {
+        const req = indexedDB.deleteDatabase(DB_NAME);
+        req.onsuccess = () => resolve();
+        req.onerror = () => {
+          reject(req.error ?? new Error("No se pudo borrar IndexedDB"));
+        };
+        req.onblocked = () => {
+          reject(new Error("IndexedDB está en uso y no se pudo borrar."));
+        };
+      }),
+  );
+}
+
 export async function getActiveDeviceVault(): Promise<
   import("@/lib/vault/types").DeviceVaultRecord | null
 > {
@@ -213,20 +231,7 @@ export async function getActiveDeviceVault(): Promise<
   const active = meta.activeVaultId
     ? devices.find((v) => v.id === meta.activeVaultId) ?? devices[0]
     : devices[0];
-  if (!active) return null;
-  if (
-    !isMockBiometrics() &&
-    active.storage === "largeBlob" &&
-    (active.iv || active.ciphertext || active.mettalCredentials)
-  ) {
-    const scrubbed = await putVault({
-      ...active,
-      mettalConnected:
-        active.mettalConnected === true || active.mettalCredentials != null,
-    });
-    return scrubbed.type === "device" ? scrubbed : active;
-  }
-  return active;
+  return active ?? null;
 }
 
 export async function getIntent(

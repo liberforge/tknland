@@ -17,7 +17,9 @@ export function UnsupportedScreen({ reason }: UnsupportedScreenProps) {
           proteger tu billetera. Este teléfono o navegador aún no la admite.
         </p>
         {reason ? (
-          <p className="mt-4 text-sm text-ink-muted/80">{reason}</p>
+          <pre className="mt-4 max-h-64 overflow-auto whitespace-pre-wrap break-all text-left font-mono text-xs leading-5 text-ink-muted/80 select-text">
+            {reason}
+          </pre>
         ) : null}
       </div>
     </section>

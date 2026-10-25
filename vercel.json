@@ -65,5 +65,11 @@
       ]
     }
   ],
+  "functions": {
+    "api/vault.ts": {
+      "regions": ["fra1"],
+      "maxDuration": 10
+    }
+  },
   "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }]
 }

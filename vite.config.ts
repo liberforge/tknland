@@ -1,7 +1,7 @@
 import { execSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { defineConfig, type Connect, type Plugin } from "vite";
+import { defineConfig, loadEnv, type Connect, type Plugin, type ViteDevServer } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { VitePWA } from "vite-plugin-pwa";
@@ -56,6 +56,70 @@ function publishAiDocs(): Plugin {
   };
 }
 
+/** Same handler as `api/vault.ts`, so a tunnel to this dev server can reach Upstash. */
+function vaultApiDev(): Plugin {
+  const handlerPath = fileURLToPath(
+    new URL("./server/vault-handler.ts", import.meta.url),
+  );
+
+  const readBody = (req: Connect.IncomingMessage): Promise<string> =>
+    new Promise((resolve, reject) => {
+      const chunks: Buffer[] = [];
+      req.on("data", (chunk: Buffer | string) => {
+        chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
+      });
+      req.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
+      req.on("error", reject);
+    });
+
+  const attach = (server: ViteDevServer) => {
+    server.middlewares.use((req, res, next) => {
+      const path = req.url?.split("?")[0];
+      if (path !== "/api/vault") return next();
+      void (async () => {
+        try {
+          const mod = (await server.ssrLoadModule(handlerPath)) as typeof import(
+            "./server/vault-handler.ts"
+          );
+          let body: unknown;
+          if (req.method === "POST") {
+            const raw = await readBody(req);
+            if (raw) {
+              try {
+                body = JSON.parse(raw) as unknown;
+              } catch {
+                body = null;
+              }
+            }
+          }
+          const host = req.headers.host ?? "127.0.0.1";
+          const originHeader = req.headers.origin;
+          const result = await mod.handleVault({
+            method: req.method ?? "GET",
+            url: new URL(req.url ?? "/api/vault", `http://${host}`),
+            origin: typeof originHeader === "string" ? originHeader : null,
+            body,
+          });
+          res.statusCode = result.status;
+          res.setHeader("content-type", "application/json; charset=utf-8");
+          res.setHeader("cache-control", "no-store");
+          res.end(JSON.stringify(result.body));
+        } catch (err) {
+          console.error(err);
+          res.statusCode = 500;
+          res.setHeader("content-type", "application/json; charset=utf-8");
+          res.end(JSON.stringify({ error: "No se pudo guardar la billetera." }));
+        }
+      })();
+    });
+  };
+
+  return {
+    name: "vault-api-dev",
+    configureServer: attach,
+  };
+}
+
 function resolveAppCommit(): string {
   const fromVercel = process.env.VERCEL_GIT_COMMIT_SHA?.trim();
   if (fromVercel) return fromVercel.slice(0, 7);
@@ -71,6 +135,15 @@ function resolveAppCommit(): string {
 }
 
 export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, fileURLToPath(new URL(".", import.meta.url)), "");
+  for (const key of [
+    "KV_REST_API_URL",
+    "KV_REST_API_TOKEN",
+    "KV_REST_API_READ_ONLY_TOKEN",
+  ]) {
+    if (env[key] && !process.env[key]) process.env[key] = env[key];
+  }
+
   const isDev = mode === "development";
   const appName = isDev ? "DEV tkn.land" : "tkn.land";
   const appCommit = resolveAppCommit();
@@ -82,6 +155,7 @@ export default defineConfig(({ mode }) => {
       __APP_BUILT_AT__: JSON.stringify(appBuiltAt),
     },
     plugins: [
+      vaultApiDev(),
       publishAiDocs(),
       react(),
       tailwindcss(),
@@ -129,6 +203,7 @@ export default defineConfig(({ mode }) => {
           globPatterns: ["**/*.{js,css,html,ico,png,svg,woff2}"],
           navigateFallback: "/index.html",
           navigateFallbackDenylist: [
+            /^\/api\//,
             /^\/docs\//,
             /^\/llms/,
             /^\/robots\.txt$/,

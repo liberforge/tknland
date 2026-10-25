@@ -12,15 +12,18 @@ import { WithdrawSheet } from "./components/WithdrawSheet";
 import { SetupScreen } from "./screens/SetupScreen";
 import { UnsupportedScreen } from "./screens/UnsupportedScreen";
 import {
+  canImmediateGet,
   getWebAuthnHostHint,
   isMockBiometrics,
   isPrfSupported,
+  WebAuthnCancelled,
 } from "./lib/webauthn/prf";
 import {
+  deleteAppDatabase,
   getActiveDeviceVault,
   requestPersistentStorage,
 } from "./lib/vault/db";
-import { markBackupCompleted, openOrCreateDeviceVault, verifyVaultUnlock, withDeviceVaultSeed } from "./lib/vault/ceremony";
+import { markBackupCompleted, createNewDeviceVault, openOrCreateDeviceVault, restoreDeviceVault, withDeviceVaultSeed } from "./lib/vault/ceremony";
 import type { DeviceVaultRecord } from "./lib/vault/types";
 import { getPrimaryAddress } from "./lib/vault/evm";
 import { EVM_CHAIN } from "./lib/evm/config";
@@ -30,7 +33,6 @@ import {
   useSimulatedAddress,
 } from "./lib/evm/dev-address";
 import {
-  disconnectMettal,
   storeMettalCredentials,
   type MettalCredentials,
 } from "./lib/mettal/credentials";
@@ -64,7 +66,7 @@ export default function App() {
   const [boot, setBoot] = useState<BootState>({ status: "loading" });
   const [setupBusy, setSetupBusy] = useState(false);
   const [setupError, setSetupError] = useState<string | null>(null);
-  const [unlockHint, setUnlockHint] = useState<string | null>(null);
+  const [clearError, setClearError] = useState<string | null>(null);
   const [homeBalance, setHomeBalance] = useState<string | null>(null);
   const consumedHashRef = useRef("");
 
@@ -205,17 +207,23 @@ export default function App() {
     };
   }, []);
 
-  async function handleSetup() {
+  async function handleSetup(mode: "auto" | "restore" | "create" = "auto") {
     setSetupBusy(true);
     setSetupError(null);
     try {
-      const vault = await openOrCreateDeviceVault();
+      const vault =
+        mode === "restore"
+          ? await restoreDeviceVault()
+          : mode === "create"
+            ? await createNewDeviceVault()
+            : await openOrCreateDeviceVault();
       setBoot({ status: "ready", vault });
       void refreshBalance(vault);
     } catch (err) {
+      if (err instanceof WebAuthnCancelled) return;
       const message =
         err instanceof Error ? err.message : "No se pudo abrir la billetera";
-      if (/PRF|does not support|no admite/i.test(message)) {
+      if (/no admite claves de acceso con PRF|does not support/i.test(message)) {
         setBoot({ status: "unsupported", reason: message });
       } else {
         setSetupError(message);
@@ -225,32 +233,18 @@ export default function App() {
     }
   }
 
-  const handleEnsureVault = useCallback(async () => {
+  const handleEnsureVault = useCallback(async (mode?: "restore" | "create") => {
     if (boot.status === "ready") return boot.vault;
-    const vault = await openOrCreateDeviceVault();
+    const vault =
+      mode === "restore"
+        ? await restoreDeviceVault()
+        : mode === "create" || mockBiometrics
+          ? await createNewDeviceVault()
+          : await openOrCreateDeviceVault();
     setBoot({ status: "ready", vault });
     void refreshBalance(vault);
     return vault;
   }, [boot, refreshBalance]);
-
-  async function handleTestUnlock() {
-    if (boot.status !== "ready") return;
-    setUnlockHint(
-      mockBiometrics
-        ? "Desbloqueo mock…"
-        : "Esperando la biometría…",
-    );
-    try {
-      const { wordCount } = await verifyVaultUnlock(boot.vault);
-      setUnlockHint(
-        mockBiometrics
-          ? `Mock OK: frase de ${wordCount} palabras`
-          : `Listo: frase de ${wordCount} palabras descifrada y luego borrada`,
-      );
-    } catch (err) {
-      setUnlockHint(err instanceof Error ? err.message : "Error al desbloquear");
-    }
-  }
 
   async function handleRevealSeed(): Promise<string> {
     if (boot.status !== "ready") {
@@ -277,19 +271,17 @@ export default function App() {
     [boot],
   );
 
-  function handleDisconnectMettal() {
-    if (!import.meta.env.DEV || boot.status !== "ready") return;
-
+  function handleClearIndexedDb() {
+    if (!import.meta.env.DEV) return;
     void (async () => {
       try {
-        const vault = await disconnectMettal(boot.vault);
-        setBoot({ status: "ready", vault });
-        setMenuOpen(false);
+        await deleteAppDatabase();
+        forgetPendingHandshake();
+        clearLocationHash();
+        window.location.reload();
       } catch (err) {
-        setUnlockHint(
-          err instanceof Error
-            ? err.message
-            : "No se pudo desconectar Mettal.",
+        setClearError(
+          err instanceof Error ? err.message : "No se pudo borrar IndexedDB.",
         );
       }
     })();
@@ -376,7 +368,10 @@ export default function App() {
           <SetupScreen
             busy={setupBusy}
             error={setupError}
-            onSetup={() => void handleSetup()}
+            chooseAccount={!mockBiometrics && !canImmediateGet()}
+            onContinue={() => void handleSetup("auto")}
+            onRestore={() => void handleSetup("restore")}
+            onCreate={() => void handleSetup("create")}
             mockBiometrics={mockBiometrics}
           />
         ) : null}
@@ -410,15 +405,10 @@ export default function App() {
         <MenuSheet
           open={menuOpen}
           onClose={() => setMenuOpen(false)}
-          onTestUnlock={
-            import.meta.env.DEV ? handleTestUnlock : undefined
+          onClearIndexedDb={
+            import.meta.env.DEV ? handleClearIndexedDb : undefined
           }
-          onDisconnectMettal={
-            import.meta.env.DEV && mettalConnected
-              ? handleDisconnectMettal
-              : undefined
-          }
-          unlockHint={unlockHint}
+          clearError={clearError}
           backupCompleted={boot.vault.backupCompleted}
           mockBiometrics={mockBiometrics}
           vault={boot.vault}

@@ -19,9 +19,8 @@ import {
 type MenuSheetProps = {
   open: boolean;
   onClose: () => void;
-  onTestUnlock?: () => void;
-  onDisconnectMettal?: () => void;
-  unlockHint?: string | null;
+  onClearIndexedDb?: () => void;
+  clearError?: string | null;
   backupCompleted?: boolean;
   mockBiometrics?: boolean;
   vault: DeviceVaultRecord;
@@ -49,9 +48,8 @@ type NetworkStatus =
 export function MenuSheet({
   open,
   onClose,
-  onTestUnlock,
-  onDisconnectMettal,
-  unlockHint,
+  onClearIndexedDb,
+  clearError,
   backupCompleted = false,
   mockBiometrics = false,
   vault,
@@ -302,6 +300,16 @@ export function MenuSheet({
               />
               {import.meta.env.DEV ? (
                 <MenuItem
+                  label="DEV: replace seed phrase"
+                  hint="Reemplaza la frase aunque haya saldo"
+                  onClick={() => {
+                    setRestoreError(null);
+                    setView("restore");
+                  }}
+                />
+              ) : null}
+              {import.meta.env.DEV ? (
+                <MenuItem
                   label="DEV: Simular dirección"
                   hint={
                     simulatedAddress
@@ -315,18 +323,14 @@ export function MenuSheet({
                   }}
                 />
               ) : null}
-              {onTestUnlock ? (
+              {onClearIndexedDb ? (
                 <MenuItem
-                  label="DEV: Probar desbloqueo"
-                  hint={unlockHint ?? "Biometría → descifrar → borrar"}
-                  onClick={onTestUnlock}
-                />
-              ) : null}
-              {onDisconnectMettal ? (
-                <MenuItem
-                  label="DEV: Disconnect mettal"
-                  hint="Borra la conexión para probarla otra vez"
-                  onClick={onDisconnectMettal}
+                  label="DEV: Clear IndexedDB"
+                  hint={
+                    clearError ??
+                    "Borra los datos del sitio, como Safari tras dos semanas"
+                  }
+                  onClick={onClearIndexedDb}
                 />
               ) : null}
             </ul>
@@ -402,20 +406,19 @@ export function MenuSheet({
                 reclamo por daños, pérdidas o perjuicios derivados de su uso.
               </p>
               <p>
-                Tu frase secreta se guarda en tu teléfono, protegida por la
-                seguridad biométrica del dispositivo. Esto es autocustodia
-                total: tkn.land no almacena ni registro de actividad, ni
-                contraseñas, ni claves. Todas las operaciones se ejecutan bajo
-                tu control.
+                Tu frase secreta se cifra en este dispositivo con la biometría.
+                En el servidor solo se guarda ese cifrado: tkn.land no puede
+                leerlo, ni tiene registro de actividad ni contraseñas. Todas
+                las operaciones se ejecutan bajo tu control.
               </p>
               <p>
-                Si pierdes, reinicias o borras el teléfono, o si se invalidan
-                las claves biométricas,{" "}
+                La misma clave de acceso abre la billetera donde esté
+                sincronizada. En un dispositivo nuevo hace falta la frase
+                secreta escrita en papel. Sin la clave y sin esa frase,{" "}
                 <span className="font-semibold text-ink">
-                  cualquier token guardado en la app es irrecuperable
+                  los tokens no se pueden recuperar
                 </span>
-                . Es tu responsabilidad hacer una copia de seguridad de tu frase secreta y guardarla
-                en un lugar seguro.
+                .
               </p>
               <p>
                 Ten cuidado: cualquiera que tenga tu frase secreta puede
