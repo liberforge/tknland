@@ -120,6 +120,20 @@ function vaultApiDev(): Plugin {
   };
 }
 
+/** One file Vercel can start. The TypeScript entry imports modules outside api/. */
+function bundleVaultFunction(): Plugin {
+  return {
+    name: "bundle-vault-function",
+    apply: "build",
+    buildStart() {
+      execSync("node scripts/bundle-vault.mjs", {
+        cwd: fileURLToPath(new URL(".", import.meta.url)),
+        stdio: "inherit",
+      });
+    },
+  };
+}
+
 function resolveAppCommit(): string {
   const fromVercel = process.env.VERCEL_GIT_COMMIT_SHA?.trim();
   if (fromVercel) return fromVercel.slice(0, 7);
@@ -155,6 +169,7 @@ export default defineConfig(({ mode }) => {
       __APP_BUILT_AT__: JSON.stringify(appBuiltAt),
     },
     plugins: [
+      bundleVaultFunction(),
       vaultApiDev(),
       publishAiDocs(),
       react(),

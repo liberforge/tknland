@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { handleVault } from "../server/vault-handler.ts";
+import { handleVault } from "./vault-handler.ts";
 
 function header(req: IncomingMessage, name: string): string | null {
   const value = req.headers[name];
