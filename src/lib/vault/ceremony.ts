@@ -27,7 +27,8 @@ import { VAULT_PRF_SALT } from "@/lib/vault/prf-salt";
 import {
   createRemoteVault,
   fetchChallengeBytes,
-  fetchRemoteBlob,
+  fetchRemoteVault,
+  repairRemoteVault,
   updateRemoteVault,
 } from "@/lib/vault/remote-vault";
 import {
@@ -42,6 +43,7 @@ import {
   wipeBytes,
 } from "@/lib/bytes";
 import { isMockBiometrics } from "@/lib/webauthn/mock-biometrics";
+import { passkeyPublicKeyFromRegistration } from "@/lib/webauthn/passkey-public-key";
 
 /**
  * A biometric sheet cannot be dismissed this quickly. A faster
@@ -62,6 +64,16 @@ function newVaultId(): string {
 
 function saltBytes(): Uint8Array {
   return VAULT_PRF_SALT.slice();
+}
+
+function readPasskeyPublicKey(
+  registration: Record<string, unknown>,
+): string | undefined {
+  try {
+    return passkeyPublicKeyFromRegistration(registration) ?? undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export function normalizeMnemonic(raw: string): string {
@@ -239,7 +251,14 @@ async function publishNewVault(
     wipePrfOutput(prfOutput);
     prfOutput = null;
     blob = await encryptPayload(payload, aesKey);
-    await createRemoteVault(passkey.registration, blob);
+    const passkeyPublicKey = readPasskeyPublicKey(passkey.registration);
+    let remoteVaultSeen = false;
+    try {
+      await createRemoteVault(passkey.registration, blob);
+      remoteVaultSeen = true;
+    } catch {
+      // The local copy still opens. Home retries the Upstash row.
+    }
 
     const vault: DeviceVaultRecord = {
       id: newVaultId(),
@@ -254,6 +273,8 @@ async function publishNewVault(
       backupCompleted: options.backupCompleted,
       balanceAtLeast500Since: null,
       storage: "server",
+      ...(passkeyPublicKey ? { passkeyPublicKey } : {}),
+      ...(remoteVaultSeen ? { remoteVaultSeen: true as const } : {}),
     };
     return rememberVault(vault);
   } finally {
@@ -330,6 +351,7 @@ export async function withDeviceVaultSecrets<T>(
   let prfOutput: Uint8Array | null = null;
   let payload: VaultPayload | null = null;
   let remoteBlob: Uint8Array | null = null;
+  let remotePublicKey: string | null = null;
   const hasLocalBlob = Boolean(vault.iv && vault.ciphertext);
 
   try {
@@ -358,7 +380,9 @@ export async function withDeviceVaultSecrets<T>(
       if (!server) {
         throw new Error("No se pudo abrir la billetera guardada.");
       }
-      remoteBlob = await fetchRemoteBlob(vault.credentialId);
+      const remote = await fetchRemoteVault(vault.credentialId);
+      remoteBlob = remote?.blob ?? null;
+      remotePublicKey = remote?.publicKey ?? null;
       if (!remoteBlob) {
         throw new Error("Esa clave de acceso no tiene una billetera guardada.");
       }
@@ -373,6 +397,12 @@ export async function withDeviceVaultSecrets<T>(
         ...cacheFields(remoteBlob),
         storage: server ? "server" : vault.storage,
         mettalConnected: payload.mettal != null,
+        remoteVaultSeen: true,
+        ...(vault.passkeyPublicKey
+          ? {}
+          : remotePublicKey
+            ? { passkeyPublicKey: remotePublicKey }
+            : {}),
       };
       delete cached.mettalCredentials;
       const stored = await putVault(cached, { replaceMettalCredentials: true });
@@ -381,6 +411,8 @@ export async function withDeviceVaultSecrets<T>(
         vault.ciphertext = stored.ciphertext;
         vault.storage = stored.storage;
         vault.mettalConnected = stored.mettalConnected;
+        vault.passkeyPublicKey = stored.passkeyPublicKey;
+        vault.remoteVaultSeen = stored.remoteVaultSeen;
       }
     }
 
@@ -443,6 +475,85 @@ export async function markBackupCompleted(
   const stored = await putVault(updated);
   if (stored.type !== "device") return updated;
   return stored;
+}
+
+const remoteVaultInflight = new Map<string, Promise<DeviceVaultRecord>>();
+
+/**
+ * One check per device record. When the Upstash row exists, remember that and
+ * keep the passkey public key. When it is missing and this phone already has
+ * the key and the ciphertext, write the row once.
+ */
+export function ensureRemoteVault(
+  vault: DeviceVaultRecord,
+): Promise<DeviceVaultRecord> {
+  if (isMockBiometrics() || vault.remoteVaultSeen) return Promise.resolve(vault);
+  const pending = remoteVaultInflight.get(vault.id);
+  if (pending) return pending;
+  const run = ensureRemoteVaultOnce(vault).finally(() => {
+    remoteVaultInflight.delete(vault.id);
+  });
+  remoteVaultInflight.set(vault.id, run);
+  return run;
+}
+
+async function ensureRemoteVaultOnce(
+  vault: DeviceVaultRecord,
+): Promise<DeviceVaultRecord> {
+  let remote: Awaited<ReturnType<typeof fetchRemoteVault>>;
+  try {
+    remote = await fetchRemoteVault(vault.credentialId);
+  } catch {
+    return vault;
+  }
+  if (remote) {
+    const next: DeviceVaultRecord = {
+      ...vault,
+      remoteVaultSeen: true,
+      ...(vault.passkeyPublicKey || !remote.publicKey
+        ? {}
+        : { passkeyPublicKey: remote.publicKey }),
+    };
+    const stored = await putVault(next);
+    return stored.type === "device" ? stored : next;
+  }
+  if (!vault.passkeyPublicKey || !vault.iv || !vault.ciphertext) return vault;
+
+  const credentialId = parseCredentialId(vault.credentialId);
+  const prfSalt = vault.prfSalt ? base64UrlToBytes(vault.prfSalt) : saltBytes();
+  let prfOutput: Uint8Array | null = null;
+  let blob: Uint8Array | null = null;
+  try {
+    const challenge = await fetchChallengeBytes();
+    const asserted = await assertPasskeyWithPrf({
+      credentialId,
+      prfSalt,
+      challenge,
+    });
+    prfOutput = asserted.prfOutput;
+    wipePrfOutput(prfOutput);
+    prfOutput = null;
+    const iv = base64UrlToBytes(vault.iv);
+    const ciphertext = base64UrlToBytes(vault.ciphertext);
+    blob = new Uint8Array(iv.length + ciphertext.length);
+    blob.set(iv, 0);
+    blob.set(ciphertext, iv.length);
+    await repairRemoteVault(vault.passkeyPublicKey, asserted.assertion, blob);
+    const next: DeviceVaultRecord = {
+      ...vault,
+      remoteVaultSeen: true,
+      storage: "server",
+    };
+    const stored = await putVault(next);
+    return stored.type === "device" ? stored : next;
+  } catch {
+    return vault;
+  } finally {
+    wipeBytes(credentialId);
+    wipeBytes(prfSalt);
+    if (prfOutput) wipePrfOutput(prfOutput);
+    if (blob) wipeBytes(blob);
+  }
 }
 
 export async function hasSharedPasskey(): Promise<boolean> {

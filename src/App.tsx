@@ -23,7 +23,7 @@ import {
   getActiveDeviceVault,
   requestPersistentStorage,
 } from "./lib/vault/db";
-import { markBackupCompleted, createNewDeviceVault, openOrCreateDeviceVault, restoreDeviceVault, withDeviceVaultSeed } from "./lib/vault/ceremony";
+import { ensureRemoteVault, markBackupCompleted, createNewDeviceVault, openOrCreateDeviceVault, restoreDeviceVault, withDeviceVaultSeed } from "./lib/vault/ceremony";
 import type { DeviceVaultRecord } from "./lib/vault/types";
 import { getPrimaryAddress } from "./lib/vault/evm";
 import { EVM_CHAIN } from "./lib/evm/config";
@@ -147,6 +147,25 @@ export default function App() {
       cancelled = true;
     };
   }, [refreshBalance]);
+
+  useEffect(() => {
+    if (boot.status !== "ready" || boot.vault.remoteVaultSeen) return;
+    const current = boot.vault;
+    let cancelled = false;
+    void ensureRemoteVault(current).then((next) => {
+      if (cancelled) return;
+      if (
+        next.remoteVaultSeen === current.remoteVaultSeen &&
+        next.passkeyPublicKey === current.passkeyPublicKey
+      ) {
+        return;
+      }
+      setBoot({ status: "ready", vault: next });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [boot]);
 
   useEffect(() => {
     if (!import.meta.env.DEV || boot.status !== "ready") return;

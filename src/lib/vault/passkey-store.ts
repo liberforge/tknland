@@ -4,7 +4,7 @@ import { getVault, listVaults, putVault, setMeta } from "@/lib/vault/db";
 import { deriveEvmAccountFromMnemonic } from "@/lib/vault/evm";
 import { decryptPayload } from "@/lib/vault/payload";
 import { VAULT_PRF_SALT } from "@/lib/vault/prf-salt";
-import { fetchRemoteBlob } from "@/lib/vault/remote-vault";
+import { fetchRemoteVault } from "@/lib/vault/remote-vault";
 import type { DeviceVaultRecord } from "@/lib/vault/types";
 import {
   WebAuthnCancelled,
@@ -49,6 +49,8 @@ export async function restoreVaultFromPasskey(options?: {
     prfOutput = null;
 
     let payload = null;
+    let passkeyPublicKey = prior?.passkeyPublicKey;
+    let remoteVaultSeen = prior?.remoteVaultSeen === true;
     if (prior?.iv && prior.ciphertext) {
       const iv = base64UrlToBytes(prior.iv);
       const ciphertext = base64UrlToBytes(prior.ciphertext);
@@ -65,10 +67,13 @@ export async function restoreVaultFromPasskey(options?: {
       }
     }
     if (!payload) {
-      blob = await fetchRemoteBlob(credentialId);
+      const remote = await fetchRemoteVault(credentialId);
+      blob = remote?.blob ?? null;
       if (!blob) {
         throw new Error("Esa clave de acceso no tiene una billetera guardada.");
       }
+      if (remote?.publicKey) passkeyPublicKey = remote.publicKey;
+      remoteVaultSeen = true;
       try {
         payload = await decryptPayload(blob, aesKey);
       } catch (err) {
@@ -97,6 +102,8 @@ export async function restoreVaultFromPasskey(options?: {
       balanceAtLeast500Since: prior?.balanceAtLeast500Since ?? null,
       storage: "server",
       mettalConnected: payload.mettal != null || prior?.mettalConnected === true,
+      ...(passkeyPublicKey ? { passkeyPublicKey } : {}),
+      ...(remoteVaultSeen ? { remoteVaultSeen: true as const } : {}),
     };
 
     const stored = await putVault(vault, { replaceMettalCredentials: true });

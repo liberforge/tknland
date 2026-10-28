@@ -82,6 +82,17 @@ function credentialIdOf(value: unknown): string {
   return value;
 }
 
+function publicKeyOf(value: unknown): string {
+  if (typeof value !== "string" || !/^[A-Za-z0-9_-]{16,2000}$/.test(value)) {
+    throw new VaultHttpError(400, "La clave pública no es válida.");
+  }
+  const bytes = Math.floor((value.length * 3) / 4);
+  if (bytes < 32 || bytes > 1024) {
+    throw new VaultHttpError(400, "La clave pública no es válida.");
+  }
+  return value;
+}
+
 function blobOf(value: unknown): string {
   if (typeof value !== "string" || !/^[A-Za-z0-9_-]{16,12000}$/.test(value)) {
     throw new VaultHttpError(400, "El contenido cifrado no es válido.");
@@ -156,7 +167,7 @@ async function readVault(credentialId: string): Promise<VaultResult> {
   if (!row?.blob || !row.publicKey) {
     return { status: 404, body: { error: "No hay una billetera para esa clave." } };
   }
-  return { status: 200, body: { blob: row.blob } };
+  return { status: 200, body: { blob: row.blob, publicKey: row.publicKey } };
 }
 
 async function createVault(
@@ -200,7 +211,60 @@ async function createVault(
   if (created !== "OK") {
     throw new VaultHttpError(409, "Esa clave ya tiene una billetera.");
   }
-  return { status: 201, body: { ok: true } };
+  return { status: 201, body: { ok: true, publicKey: row.publicKey } };
+}
+
+async function repairVault(
+  origin: string,
+  rpId: string,
+  publicKey: string,
+  assertion: AuthenticationResponseJSON,
+  blob: string,
+): Promise<VaultResult> {
+  const id = credentialIdOf(assertion.id);
+  const redis = writeRedis();
+  const key = vaultKey(id);
+  const existing = await redis.get<StoredVault>(key);
+  if (existing?.publicKey) {
+    return { status: 200, body: { ok: true, publicKey: existing.publicKey } };
+  }
+
+  let verified: Awaited<ReturnType<typeof verifyAuthenticationResponse>>;
+  try {
+    verified = await verifyAuthenticationResponse({
+      response: assertion,
+      expectedChallenge: (challenge) => consumeChallenge(challenge, origin),
+      expectedOrigin: origin,
+      expectedRPID: rpId,
+      requireUserVerification: true,
+      credential: {
+        id,
+        publicKey: new Uint8Array(base64UrlToBytes(publicKey)),
+        counter: 0,
+      },
+    });
+  } catch (err) {
+    console.error("vault repair verify", err);
+    throw new VaultHttpError(401, "La clave de acceso no autorizó este guardado.");
+  }
+  if (!verified.verified || verified.authenticationInfo.credentialID !== id) {
+    throw new VaultHttpError(401, "La clave de acceso no autorizó este guardado.");
+  }
+
+  const row: StoredVault = {
+    publicKey,
+    counter: verified.authenticationInfo.newCounter,
+    blob,
+  };
+  const created = await redis.set(key, row, { nx: true });
+  if (created !== "OK") {
+    const again = await redis.get<StoredVault>(key);
+    if (again?.publicKey) {
+      return { status: 200, body: { ok: true, publicKey: again.publicKey } };
+    }
+    throw new VaultHttpError(409, "Esa clave ya tiene una billetera.");
+  }
+  return { status: 201, body: { ok: true, publicKey } };
 }
 
 async function updateVault(
@@ -278,6 +342,15 @@ export async function handleVault(input: {
       return await updateVault(
         origin,
         rpId,
+        asAssertion(body.assertion),
+        blobOf(body.blob),
+      );
+    }
+    if (body.op === "repair") {
+      return await repairVault(
+        origin,
+        rpId,
+        publicKeyOf(body.publicKey),
         asAssertion(body.assertion),
         blobOf(body.blob),
       );

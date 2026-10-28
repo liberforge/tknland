@@ -16,6 +16,13 @@ export type DeviceVaultRecord = {
   /** Fixed app salt. Not a secret. Present so this cache can run PRF after a reload. */
   prfSalt: string;
   /**
+   * COSE public key of this passkey, base64url. Not a secret. Copied at
+   * registration, or from Upstash when this cache is rebuilt.
+   */
+  passkeyPublicKey?: string;
+  /** This passkey's ciphertext was found or written in Upstash. */
+  remoteVaultSeen?: true;
+  /**
    * Cached ciphertext (`iv || AES-GCM payload`). Missing after Safari deletes
    * site data; the next unlock downloads it from Upstash and stores it again.
    */

@@ -1,7 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
 import type { Address } from "viem";
-import { wipeBytes } from "@/lib/bytes";
-import { fetchRemoteBlob } from "@/lib/vault/remote-vault";
 import { BackupFlow } from "./BackupFlow";
 import { HighlightedAddress } from "./DestinationAccount";
 import { getPublicClient } from "@/lib/evm/client";
@@ -75,7 +73,6 @@ export function MenuSheet({
   const simulatedAddress = useSimulatedAddress();
   const [simulateInput, setSimulateInput] = useState("");
   const [simulateError, setSimulateError] = useState<string | null>(null);
-  const [upstashStatus, setUpstashStatus] = useState("…");
 
   useEffect(() => {
     let frame = 0;
@@ -108,23 +105,6 @@ export function MenuSheet({
     // Only re-run on open/close — vault updates must not reset the sheet.
     // eslint-disable-next-line react-hooks/exhaustive-deps -- vault read only when opening
   }, [open]);
-
-  useEffect(() => {
-    if (!open || view !== "about") return;
-    let cancelled = false;
-    setUpstashStatus("…");
-    void fetchRemoteBlob(vault.credentialId)
-      .then((blob) => {
-        if (blob) wipeBytes(blob);
-        if (!cancelled) setUpstashStatus(blob ? "saved" : "not found");
-      })
-      .catch(() => {
-        if (!cancelled) setUpstashStatus("not found");
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [open, view, vault.credentialId]);
 
   useEffect(() => {
     if (!open || view !== "network") return;
@@ -445,9 +425,6 @@ export function MenuSheet({
                 acceder a tu billetera.
               </p>
               <p className="pt-[40px] text-right font-mono text-[0.65rem] text-ink-muted/80">
-                upstash status: {upstashStatus}
-              </p>
-              <p className="text-right font-mono text-[0.65rem] text-ink-muted/80">
                 Build {__APP_COMMIT__}
                 <span className="mx-1.5 text-line">·</span>
                 {formatBuiltAt(__APP_BUILT_AT__)}

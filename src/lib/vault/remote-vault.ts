@@ -69,19 +69,35 @@ export async function fetchChallengeBytes(): Promise<Uint8Array> {
   return base64UrlToBytes(body.challenge);
 }
 
-/** Ciphertext for this passkey, or null when this credential has no row yet. */
-export async function fetchRemoteBlob(
+export type RemoteVaultRow = {
+  blob: Uint8Array;
+  /** COSE public key, base64url. Null when an older store omitted it. */
+  publicKey: string | null;
+};
+
+/** Ciphertext and passkey public key, or null when this credential has no row yet. */
+export async function fetchRemoteVault(
   credentialId: string,
-): Promise<Uint8Array | null> {
+): Promise<RemoteVaultRow | null> {
   const res = await fetch(
     `${vaultUrl()}?credentialId=${encodeURIComponent(credentialId)}`,
     { cache: "no-store" },
   );
   if (res.status === 404) return null;
   if (!res.ok) throw new Error(await errorMessage(res));
-  const body = (await res.json()) as { blob?: unknown };
+  const body = (await res.json()) as { blob?: unknown; publicKey?: unknown };
   if (typeof body.blob !== "string" || !body.blob) return null;
-  return base64UrlToBytes(body.blob);
+  const publicKey =
+    typeof body.publicKey === "string" && body.publicKey ? body.publicKey : null;
+  return { blob: base64UrlToBytes(body.blob), publicKey };
+}
+
+/** Ciphertext for this passkey, or null when this credential has no row yet. */
+export async function fetchRemoteBlob(
+  credentialId: string,
+): Promise<Uint8Array | null> {
+  const row = await fetchRemoteVault(credentialId);
+  return row?.blob ?? null;
 }
 
 export async function createRemoteVault(
@@ -101,6 +117,20 @@ export async function updateRemoteVault(
 ): Promise<void> {
   await postVault({
     op: "update",
+    assertion: withoutPrfOutput(assertion),
+    blob: bytesToBase64Url(blob),
+  });
+}
+
+/** Write the row only when it is still missing. An existing public key is left as-is. */
+export async function repairRemoteVault(
+  publicKey: string,
+  assertion: Record<string, unknown>,
+  blob: Uint8Array,
+): Promise<void> {
+  await postVault({
+    op: "repair",
+    publicKey,
     assertion: withoutPrfOutput(assertion),
     blob: bytesToBase64Url(blob),
   });

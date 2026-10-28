@@ -197,6 +197,12 @@ export async function putVault(
       if (!vault.storage && existing.storage) {
         merged.storage = existing.storage;
       }
+      if (!vault.passkeyPublicKey && existing.passkeyPublicKey) {
+        merged.passkeyPublicKey = existing.passkeyPublicKey;
+      }
+      if (vault.remoteVaultSeen !== true && existing.remoteVaultSeen) {
+        merged.remoteVaultSeen = existing.remoteVaultSeen;
+      }
       next = merged;
     }
     if (next.type === "device") next = withoutDuplicatedSecrets(next);
