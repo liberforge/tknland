@@ -210,6 +210,12 @@ export default defineConfig(({ mode }) => {
             /^\/sitemap\.xml$/,
             /^\/\.well-known\//,
           ],
+          runtimeCaching: [
+            {
+              urlPattern: ({ url }: { url: URL }) => url.pathname.startsWith("/api/"),
+              handler: "NetworkOnly",
+            },
+          ],
         },
       }),
     ],

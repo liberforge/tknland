@@ -1,6 +1,14 @@
 import { base64UrlToBytes, bytesToBase64Url } from "@/lib/bytes";
 
-const VAULT_URL = "/api/vault";
+const VAULT_PATH = "/api/vault";
+
+/** Apex redirects every path, including this API, and a home-screen app may not follow that. */
+function vaultUrl(): string {
+  if (typeof window !== "undefined" && window.location.hostname === "tkn.land") {
+    return `https://www.tkn.land${VAULT_PATH}`;
+  }
+  return VAULT_PATH;
+}
 
 /**
  * The PRF output is the decryption key. `toJSON()` includes it under
@@ -36,9 +44,10 @@ async function errorMessage(res: Response): Promise<string> {
 }
 
 async function postVault(body: unknown): Promise<void> {
-  const res = await fetch(VAULT_URL, {
+  const res = await fetch(vaultUrl(), {
     method: "POST",
     headers: { "content-type": "application/json" },
+    cache: "no-store",
     body: JSON.stringify(body),
   });
   if (!res.ok) throw new Error(await errorMessage(res));
@@ -46,9 +55,10 @@ async function postVault(body: unknown): Promise<void> {
 
 /** One-time server challenge. The passkey ceremony must use these exact bytes. */
 export async function fetchChallengeBytes(): Promise<Uint8Array> {
-  const res = await fetch(VAULT_URL, {
+  const res = await fetch(vaultUrl(), {
     method: "POST",
     headers: { "content-type": "application/json" },
+    cache: "no-store",
     body: JSON.stringify({ op: "challenge" }),
   });
   if (!res.ok) throw new Error(await errorMessage(res));
@@ -64,7 +74,8 @@ export async function fetchRemoteBlob(
   credentialId: string,
 ): Promise<Uint8Array | null> {
   const res = await fetch(
-    `${VAULT_URL}?credentialId=${encodeURIComponent(credentialId)}`,
+    `${vaultUrl()}?credentialId=${encodeURIComponent(credentialId)}`,
+    { cache: "no-store" },
   );
   if (res.status === 404) return null;
   if (!res.ok) throw new Error(await errorMessage(res));
