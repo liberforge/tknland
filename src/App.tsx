@@ -68,7 +68,8 @@ export default function App() {
   const [setupError, setSetupError] = useState<string | null>(null);
   const [clearError, setClearError] = useState<string | null>(null);
   const [homeBalance, setHomeBalance] = useState<string | null>(null);
-  const consumedHashRef = useRef("");
+  /** Same pay link reuses its balance read only inside this window. */
+  const consumedHashRef = useRef<{ raw: string; at: number } | null>(null);
 
   const mettalConnected =
     boot.status === "ready" &&
@@ -188,16 +189,22 @@ export default function App() {
   useEffect(() => {
     // iOS often resumes an already-open page without hashchange, and a later
     // reload can drop the fragment. Re-read on focus, and keep a short-lived
-    // copy so the action still opens.
+    // copy so the action still opens. A repeated tap of the same link reuses
+    // the balance read for 10s, then fetches again.
+    const handshakeFreshMs = 10_000;
+
     function consumeHash() {
       const fromLocation = window.location.hash;
       const raw = parseHandshakeLink(fromLocation)
         ? fromLocation
         : (readPendingHandshake() ?? "");
-      if (!raw || raw === consumedHashRef.current) return;
+      if (!raw) return;
+      const consumed = consumedHashRef.current;
+      const now = Date.now();
+      if (consumed?.raw === raw && now - consumed.at < handshakeFreshMs) return;
       const parsed = parseHandshakeLink(raw);
       if (!parsed) return;
-      consumedHashRef.current = raw;
+      consumedHashRef.current = { raw, at: now };
       rememberPendingHandshake(raw);
       setSendMode(null);
       setDepositOpen(false);
@@ -218,7 +225,7 @@ export default function App() {
     window.addEventListener("focus", consumeWhenVisible);
     document.addEventListener("visibilitychange", consumeWhenVisible);
     return () => {
-      consumedHashRef.current = "";
+      consumedHashRef.current = null;
       window.removeEventListener("hashchange", consumeHash);
       window.removeEventListener("pageshow", consumeWhenVisible);
       window.removeEventListener("focus", consumeWhenVisible);
@@ -483,7 +490,7 @@ export default function App() {
         vault={readyVault}
         mockBiometrics={mockBiometrics}
         onClose={() => {
-          consumedHashRef.current = "";
+          consumedHashRef.current = null;
           forgetPendingHandshake();
           clearLocationHash();
           setHandshakeLink(null);

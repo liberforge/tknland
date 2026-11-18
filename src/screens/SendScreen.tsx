@@ -62,7 +62,7 @@ export function SendScreen({
   }, [mode]);
 
   useEffect(() => {
-    if (!vault) return;
+    if (mode !== "send" || !vault) return;
     const address = simulatedAddress ?? getPrimaryAddress(vault);
     if (!address) {
       setBalanceFormatted("0.00");
@@ -70,18 +70,23 @@ export function SendScreen({
     }
 
     let cancelled = false;
-    void getPenmtBalance(address)
-      .then(({ formatted }) => {
-        if (!cancelled) setBalanceFormatted(formatted);
-      })
-      .catch(() => {
-        if (!cancelled) setBalanceFormatted(null);
-      });
+    const load = () => {
+      void getPenmtBalance(address)
+        .then(({ formatted }) => {
+          if (!cancelled) setBalanceFormatted(formatted);
+        })
+        .catch(() => {
+          // Keep the last reading when a poll fails.
+        });
+    };
 
+    load();
+    const id = window.setInterval(load, 10_000);
     return () => {
       cancelled = true;
+      window.clearInterval(id);
     };
-  }, [vault, simulatedAddress]);
+  }, [mode, vault, simulatedAddress]);
 
   useEffect(() => {
     if (mode !== "request" || !vault) {

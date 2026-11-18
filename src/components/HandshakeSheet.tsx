@@ -158,6 +158,48 @@ export function HandshakeSheet({
     };
   }, [link, open, senderAddress]);
 
+  const confirmPay = step.kind === "confirm" ? step.pay : null;
+
+  useEffect(() => {
+    if (!open || !confirmPay || !senderAddress) return;
+    const pay = confirmPay;
+    const sender = senderAddress;
+
+    const id = window.setInterval(() => {
+      void getPenmtFeePreview({
+        sender,
+        receiver: pay.addr,
+        amount: pay.amount,
+      })
+        .then((fee) => {
+          setStep((current) => {
+            if (current.kind !== "confirm") return current;
+            if (
+              current.pay.addr !== pay.addr ||
+              current.pay.amount !== pay.amount
+            ) {
+              return current;
+            }
+            return {
+              ...current,
+              feeFormatted: fee.needsPack ? fee.feeAmountFormatted : "0",
+              gasNote: fee.gasNote,
+              packCostFormatted: fee.packCostFormatted,
+              totalCostFormatted: fee.totalCostFormatted,
+              needsPack: fee.needsPack,
+              canAfford: fee.canAfford,
+              balanceFormatted: fee.balanceFormatted,
+            };
+          });
+        })
+        .catch(() => {
+          // Keep the last reading when a poll fails.
+        });
+    }, 10_000);
+
+    return () => window.clearInterval(id);
+  }, [open, confirmPay, senderAddress]);
+
   async function prepareConfirm(
     pay: PayLink,
     amount: string,
