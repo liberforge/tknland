@@ -34,6 +34,11 @@ function defaultAcquireAmountInput(acquireBalance: number): string {
   return formatMettalMajor(Math.min(capMinor, acquireBalance));
 }
 
+function acquireCurrencyLabel(currency: string): string {
+  const code = currency.trim().toUpperCase();
+  return code === "PEN" ? "soles" : code;
+}
+
 /** TEMP DEV: always show bank-account screen (pretend Mettal acquire balance is 0). */
 const DEV_TEST_FORCE_BANK_DEPOSIT_SCREEN = false; // import.meta.env.DEV;
 
@@ -79,6 +84,8 @@ export function AcquireDepositSheet({
   const [amountInput, setAmountInput] = useState("");
   const [amountError, setAmountError] = useState<string | null>(null);
   const sessionRef = useRef<AcquireSession | null>(null);
+  /** Mettal balance already present when the bank account was shown. */
+  const acquireBaselineRef = useRef(0);
   const vaultRef = useRef(vault);
   vaultRef.current = vault;
   const onVaultUpdatedRef = useRef(onVaultUpdated);
@@ -99,6 +106,7 @@ export function AcquireDepositSheet({
   useEffect(() => {
     if (open) return;
     clearSession();
+    acquireBaselineRef.current = 0;
     setStep({ kind: "idle" });
     setCopied(false);
     setAmountInput("");
@@ -177,6 +185,7 @@ export function AcquireDepositSheet({
           return;
         }
 
+        acquireBaselineRef.current = unlocked.balances.acquireBalance;
         setStep({
           kind: "loading",
           message: "Consultando tu cuenta bancaria…",
@@ -204,6 +213,84 @@ export function AcquireDepositSheet({
     };
   }, [open]);
 
+  async function startAcquire(minor: number): Promise<void> {
+    const session = sessionRef.current;
+    if (!session) {
+      setStep({
+        kind: "error",
+        message: "La sesión expiró. Cierra e inténtalo de nuevo.",
+      });
+      return;
+    }
+
+    setAmountError(null);
+    setStep({
+      kind: "acquiring",
+      message: "Firmando y agregando PENMT…",
+    });
+
+    try {
+      let accessToken = session.accessToken;
+      let challenge;
+      try {
+        challenge = await issueAcquireChallenge({
+          accessToken,
+          address: session.account.address,
+          network: METTAL_ACQUIRE_NETWORK,
+        });
+      } catch {
+        if (sessionRef.current !== session) return;
+        accessToken = await refreshAccessToken(session);
+        challenge = await issueAcquireChallenge({
+          accessToken,
+          address: session.account.address,
+          network: METTAL_ACQUIRE_NETWORK,
+        });
+      }
+      if (sessionRef.current !== session) return;
+
+      const signature = await session.signer.signMessage({
+        message: challenge.message,
+      });
+      if (sessionRef.current !== session) return;
+
+      let previousBalanceRaw = 0n;
+      try {
+        const before = await getPenmtBalance(session.account.address);
+        previousBalanceRaw = before.raw;
+      } catch {
+        // If the RPC is briefly down, still wait and treat any later increase as arrival.
+      }
+      if (sessionRef.current !== session) return;
+
+      const result = await acquireTokens({
+        accessToken,
+        amount: minor,
+        address: session.account.address,
+        message: challenge.message,
+        signature,
+        symbol: METTAL_DEFAULT_SYMBOL,
+        network: METTAL_ACQUIRE_NETWORK,
+      });
+      if (sessionRef.current !== session) return;
+
+      setStep({
+        kind: "waiting-receipt",
+        result,
+        previousBalanceRaw,
+      });
+    } catch (err) {
+      if (sessionRef.current !== session) return;
+      setStep({
+        kind: "error",
+        message:
+          err instanceof Error
+            ? err.message
+            : "No se pudo agregar PENMT a tu billetera.",
+      });
+    }
+  }
+
   useEffect(() => {
     if (step.kind !== "waiting-deposit") return;
 
@@ -225,14 +312,17 @@ export function AcquireDepositSheet({
           if (cancelled) return;
           balances = await getAccountBalances({ accessToken });
         }
-        if (cancelled) return;
-        if (balances.acquireBalance > 0) {
-          setAmountInput(defaultAcquireAmountInput(balances.acquireBalance));
+        if (cancelled || sessionRef.current !== session) return;
+        const arrived = balances.acquireBalance;
+        if (arrived <= acquireBaselineRef.current) return;
+        if (arrived < METTAL_MIN_ACQUIRE_MINOR) {
           setStep({
-            kind: "amount",
-            acquireBalance: balances.acquireBalance,
+            kind: "error",
+            message: `El monto mínimo es S/ ${formatMettalMajor(METTAL_MIN_ACQUIRE_MINOR)}.`,
           });
+          return;
         }
+        await startAcquire(arrived);
       } catch {
         // Keep waiting; bank credits can take a while and transient errors are OK.
       } finally {
@@ -314,14 +404,6 @@ export function AcquireDepositSheet({
 
   async function handleAmountContinue() {
     if (step.kind !== "amount") return;
-    const session = sessionRef.current;
-    if (!session) {
-      setStep({
-        kind: "error",
-        message: "La sesión expiró. Cierra e inténtalo de nuevo.",
-      });
-      return;
-    }
 
     const minor = parseMettalMajorToMinor(amountInput);
     if (minor === null || minor <= 0) {
@@ -341,66 +423,7 @@ export function AcquireDepositSheet({
       return;
     }
 
-    setAmountError(null);
-    setStep({
-      kind: "acquiring",
-      message: "Firmando y agregando PENMT…",
-    });
-
-    try {
-      let accessToken = session.accessToken;
-      let challenge;
-      try {
-        challenge = await issueAcquireChallenge({
-          accessToken,
-          address: session.account.address,
-          network: METTAL_ACQUIRE_NETWORK,
-        });
-      } catch {
-        accessToken = await refreshAccessToken(session);
-        challenge = await issueAcquireChallenge({
-          accessToken,
-          address: session.account.address,
-          network: METTAL_ACQUIRE_NETWORK,
-        });
-      }
-
-      const signature = await session.signer.signMessage({
-        message: challenge.message,
-      });
-
-      let previousBalanceRaw = 0n;
-      try {
-        const before = await getPenmtBalance(session.account.address);
-        previousBalanceRaw = before.raw;
-      } catch {
-        // If the RPC is briefly down, still wait and treat any later increase as arrival.
-      }
-
-      const result = await acquireTokens({
-        accessToken,
-        amount: minor,
-        address: session.account.address,
-        message: challenge.message,
-        signature,
-        symbol: METTAL_DEFAULT_SYMBOL,
-        network: METTAL_ACQUIRE_NETWORK,
-      });
-
-      setStep({
-        kind: "waiting-receipt",
-        result,
-        previousBalanceRaw,
-      });
-    } catch (err) {
-      setStep({
-        kind: "error",
-        message:
-          err instanceof Error
-            ? err.message
-            : "No se pudo agregar PENMT a tu billetera.",
-      });
-    }
+    await startAcquire(minor);
   }
 
   const title =
@@ -590,7 +613,7 @@ export function AcquireDepositSheet({
             </p>
             <div className="mt-6 rounded-2xl border border-line bg-surface-raised px-4 py-5">
               <p className="text-xs font-medium tracking-wide text-ink-muted uppercase">
-                Cuenta bancaria {step.account.currency}
+                CCI cuenta bancaria {acquireCurrencyLabel(step.account.currency)}
               </p>
               <p className="mt-3 font-mono text-lg font-semibold tabular-nums tracking-tight text-ink whitespace-nowrap">
                 {step.account.bankAccount}
