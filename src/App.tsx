@@ -1,3 +1,4 @@
+import { clientError, reportClientError } from "./lib/client-error";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { HomeScreen } from "./screens/HomeScreen";
 import { MenuSheet } from "./components/MenuSheet";
@@ -93,11 +94,11 @@ export default function App() {
           const { formatted } = await getPenmtBalance(address);
           setHomeBalance(formatted);
           return;
-        } catch {
+        } catch (err) {
+          reportClientError("balance.refresh", err);
           if (i < attempts - 1) {
             await new Promise((resolve) => setTimeout(resolve, 600));
           }
-          // Keep last known balance on RPC blips; if invalidated, leave blank.
         }
       }
     },
@@ -140,7 +141,10 @@ export default function App() {
       if (cancelled) return;
       setBoot({
         status: "unsupported",
-        reason: err instanceof Error ? err.message : "Error al iniciar",
+        reason: clientError(
+          "boot",
+          err instanceof Error ? err : "Error al iniciar",
+        ),
       });
     });
 
@@ -252,7 +256,7 @@ export default function App() {
       if (/no admite claves de acceso con PRF|does not support/i.test(message)) {
         setBoot({ status: "unsupported", reason: message });
       } else {
-        setSetupError(message);
+        setSetupError(clientError("setup.open", message));
       }
     } finally {
       setSetupBusy(false);
@@ -307,7 +311,10 @@ export default function App() {
         window.location.reload();
       } catch (err) {
         setClearError(
-          err instanceof Error ? err.message : "No se pudo borrar IndexedDB.",
+          clientError(
+            "setup.clear",
+            err instanceof Error ? err : "No se pudo borrar IndexedDB.",
+          ),
         );
       }
     })();

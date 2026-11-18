@@ -1366,7 +1366,7 @@ var require_build2 = __commonJS({
     };
     var ORIGINAL_VIEW_WRITER_WRITE = ViewWriter.prototype.write;
     var ORIGINAL_VIEW_WRITER_FINAL = ViewWriter.prototype.final;
-    var NAME = "name";
+    var NAME2 = "name";
     var VALUE_HEX_VIEW = "valueHexView";
     var IS_HEX_ONLY = "isHexOnly";
     var ID_BLOCK = "idBlock";
@@ -4489,13 +4489,13 @@ ${values.join("\n")}` : `${blockName} :`;
             verified: false,
             result: { error: "Wrong values for Choice type" }
           };
-          if (inputSchema.hasOwnProperty(NAME))
+          if (inputSchema.hasOwnProperty(NAME2))
             _result.name = inputSchema.name;
           return _result;
         }
       }
       if (inputSchema instanceof Any) {
-        if (inputSchema.hasOwnProperty(NAME))
+        if (inputSchema.hasOwnProperty(NAME2))
           root[inputSchema.name] = inputData;
         return {
           verified: true,
@@ -4700,7 +4700,7 @@ ${values.join("\n")}` : `${blockName} :`;
                   return result;
                 }
               }
-              if (NAME in inputSchema.valueBlock.value[0] && inputSchema.valueBlock.value[0].name.length > 0) {
+              if (NAME2 in inputSchema.valueBlock.value[0] && inputSchema.valueBlock.value[0].name.length > 0) {
                 let arrayRoot = {};
                 if (LOCAL in inputSchema.valueBlock.value[0] && inputSchema.valueBlock.value[0].local)
                   arrayRoot = inputData;
@@ -16458,18 +16458,18 @@ var require_x509_cjs = __commonJS({
       tsyringe.injectable()
     ], exports2.EcAlgorithm);
     tsyringe.container.registerSingleton(diAlgorithm, exports2.EcAlgorithm);
-    var NAME = /* @__PURE__ */ Symbol("name");
+    var NAME2 = /* @__PURE__ */ Symbol("name");
     var VALUE = /* @__PURE__ */ Symbol("value");
     var TextObject = class {
       constructor(name, items = {}, value = "") {
-        this[NAME] = name;
+        this[NAME2] = name;
         this[VALUE] = value;
         for (const key in items) {
           this[key] = items[key];
         }
       }
     };
-    TextObject.NAME = NAME;
+    TextObject.NAME = NAME2;
     TextObject.VALUE = VALUE;
     var DefaultAlgorithmSerializer = class {
       static toTextObject(alg) {
@@ -20277,6 +20277,65 @@ __export(vercel_entry_exports, {
   default: () => handler
 });
 module.exports = __toCommonJS(vercel_entry_exports);
+
+// server/client-error.ts
+var STEP = /^[a-z0-9._-]{1,64}$/;
+var CODE = /^[a-z0-9]{6}$/;
+var NAME = /^[A-Za-z][A-Za-z0-9_]{0,39}$/;
+var METHOD = /^(GET|POST|PUT|DELETE)$/;
+var PATH = /^\/[A-Za-z0-9/_\-.]{0,120}$/;
+function redact(text) {
+  return text.replace(/bearer\s+\S+/gi, "bearer [redacted]").replace(/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{4,}/g, "[redacted]").replace(
+    /\b(secret|mnemonic|seed|api[_-]?key|access[_-]?token|authorization)\b\s*[:=]\s*\S+/gi,
+    "$1 [redacted]"
+  ).replace(/\b[a-fA-F0-9]{64,}\b/g, "[redacted]").replace(/https?:\/\/\S+/gi, (url) => {
+    try {
+      return new URL(url).pathname || "/";
+    } catch {
+      return "/";
+    }
+  }).replace(/\s+/g, " ").trim().slice(0, 240);
+}
+function acceptClientError(body) {
+  if (!body || typeof body !== "object") return { ok: false };
+  const raw = body;
+  if (typeof raw.code !== "string" || !CODE.test(raw.code)) return { ok: false };
+  if (typeof raw.step !== "string" || !STEP.test(raw.step)) return { ok: false };
+  if (typeof raw.message !== "string") return { ok: false };
+  const message = redact(raw.message);
+  if (!message) return { ok: false };
+  if (typeof raw.online !== "boolean") return { ok: false };
+  const name = typeof raw.name === "string" && NAME.test(raw.name) ? raw.name : "Error";
+  const method = typeof raw.method === "string" && METHOD.test(raw.method) ? raw.method : void 0;
+  const path = typeof raw.path === "string" && PATH.test(raw.path) ? raw.path : void 0;
+  return {
+    ok: true,
+    record: {
+      code: raw.code,
+      step: raw.step,
+      name,
+      message,
+      method,
+      path,
+      online: raw.online
+    }
+  };
+}
+function logClientError(record) {
+  console.error(
+    JSON.stringify({
+      source: "client-error",
+      at: (/* @__PURE__ */ new Date()).toISOString(),
+      code: record.code,
+      step: record.step,
+      name: record.name,
+      message: record.message,
+      method: record.method ?? null,
+      path: record.path ?? null,
+      online: record.online
+    })
+  );
+}
 
 // node_modules/.pnpm/uncrypto@0.1.3/node_modules/uncrypto/dist/crypto.node.mjs
 var import_node_crypto = __toESM(require("node:crypto"), 1);
@@ -30074,6 +30133,7 @@ async function handler(req, res) {
     const host = header(req, "x-forwarded-host") ?? header(req, "host") ?? "localhost";
     const proto = header(req, "x-forwarded-proto") ?? "https";
     const url = new URL(req.url ?? "/api/vault", `${proto}://${host}`);
+    const report = url.pathname === "/api/client-error" || url.searchParams.get("report") === "client-error";
     let body;
     if (req.method === "POST") {
       const raw = await readRawBody(req);
@@ -30084,6 +30144,20 @@ async function handler(req, res) {
           body = null;
         }
       }
+    }
+    if (report) {
+      if (req.method !== "POST") {
+        sendJson(res, 405, { error: "M\xE9todo no permitido." }, cors);
+        return;
+      }
+      const accepted = acceptClientError(body);
+      if (!accepted.ok) {
+        sendJson(res, 400, { error: "El reporte no es v\xE1lido." }, cors);
+        return;
+      }
+      logClientError(accepted.record);
+      sendJson(res, 200, { ok: true }, cors);
+      return;
     }
     const result = await handleVault({
       method: req.method ?? "GET",

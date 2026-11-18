@@ -2,6 +2,7 @@ import {
   METTAL_API_URL,
   type MettalCredentials,
 } from "@/lib/mettal/credentials";
+import { RequestError } from "@/lib/client-error";
 
 export const METTAL_DEFAULT_SYMBOL = "PENMT";
 export const METTAL_DEFAULT_COUNTRY = "PE";
@@ -32,8 +33,27 @@ export type MettalAccountBalances = {
 type IssueTokenResponse = {
   accessToken: string;
   tokenType: string;
+  /** Lifetime in seconds. */
   expiresIn: number;
 };
+
+type CachedMettalToken = {
+  accessToken: string;
+  expiresAtMs: number;
+};
+
+const mettalTokenCache = new Map<string, CachedMettalToken>();
+/** Don't reuse a token that is about to expire. */
+const METTAL_TOKEN_SKEW_MS = 60_000;
+/** A mistaken expiresIn must not pin a token for days. */
+const METTAL_TOKEN_MAX_MS = 24 * 60 * 60 * 1000;
+
+export function isFetchFailure(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  return /failed to fetch|networkerror|load failed|network request failed/i.test(
+    err.message,
+  );
+}
 
 type GetBalancesResponse = {
   success: boolean;
@@ -89,11 +109,53 @@ async function readMettalError(response: Response): Promise<string> {
   return `Error de Mettal (${response.status})`;
 }
 
+async function mettalFetch(
+  method: "GET" | "POST" | "DELETE",
+  path: string,
+  init?: { headers?: HeadersInit; body?: string; query?: string },
+): Promise<Response> {
+  try {
+    const response = await fetch(`${METTAL_API_URL}${path}${init?.query ?? ""}`, {
+      method,
+      headers: init?.headers,
+      body: init?.body,
+    });
+    if (!response.ok) {
+      throw new RequestError(method, path, await readMettalError(response));
+    }
+    return response;
+  } catch (err) {
+    if (err instanceof RequestError) throw err;
+    const message =
+      err instanceof Error && err.message ? err.message : "Failed to fetch";
+    throw new RequestError(method, path, message);
+  }
+}
+
+function mettalFailure(
+  method: "GET" | "POST" | "DELETE",
+  path: string,
+  message: string,
+): RequestError {
+  return new RequestError(method, path, message);
+}
+
+export function forgetMettalAccessToken(credentials: MettalCredentials): void {
+  mettalTokenCache.delete(credentials.key);
+}
+
 export async function issueMettalAccessToken(
   credentials: MettalCredentials,
+  options?: { force?: boolean },
 ): Promise<string> {
-  const response = await fetch(`${METTAL_API_URL}/v1/auth/token`, {
-    method: "POST",
+  const cacheKey = credentials.key;
+  if (options?.force) mettalTokenCache.delete(cacheKey);
+  const cached = mettalTokenCache.get(cacheKey);
+  if (cached && cached.expiresAtMs - METTAL_TOKEN_SKEW_MS > Date.now()) {
+    return cached.accessToken;
+  }
+
+  const response = await mettalFetch("POST", "/v1/auth/token", {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       key: credentials.key,
@@ -101,13 +163,22 @@ export async function issueMettalAccessToken(
     }),
   });
 
-  if (!response.ok) {
-    throw new Error(await readMettalError(response));
-  }
-
   const body = (await response.json()) as IssueTokenResponse;
   if (!body.accessToken?.trim()) {
-    throw new Error("Mettal no devolvió un access token.");
+    throw mettalFailure("POST", "/v1/auth/token", "Mettal no devolvió un access token.");
+  }
+
+  const ttlMs = Math.min(
+    Math.max(0, body.expiresIn) * 1000,
+    METTAL_TOKEN_MAX_MS,
+  );
+  if (ttlMs > METTAL_TOKEN_SKEW_MS) {
+    mettalTokenCache.set(cacheKey, {
+      accessToken: body.accessToken,
+      expiresAtMs: Date.now() + ttlMs,
+    });
+  } else {
+    mettalTokenCache.delete(cacheKey);
   }
   return body.accessToken;
 }
@@ -118,19 +189,15 @@ export async function getAccountBalances(options: {
   symbol?: string;
 }): Promise<MettalAccountBalances> {
   const symbol = (options.symbol ?? METTAL_DEFAULT_SYMBOL).trim().toUpperCase();
-  const response = await fetch(
-    `${METTAL_API_URL}/v1/account/balances/${encodeURIComponent(symbol)}`,
+  const response = await mettalFetch(
+    "GET",
+    `/v1/account/balances/${encodeURIComponent(symbol)}`,
     {
-      method: "GET",
       headers: {
         Authorization: `Bearer ${options.accessToken}`,
       },
     },
   );
-
-  if (!response.ok) {
-    throw new Error(await readMettalError(response));
-  }
 
   const body = (await response.json()) as GetBalancesResponse;
   const data = body.data;
@@ -142,7 +209,11 @@ export async function getAccountBalances(options: {
     typeof data.redeemBalance !== "number" ||
     !Number.isFinite(data.redeemBalance)
   ) {
-    throw new Error("Mettal no devolvió los saldos de la cuenta.");
+    throw mettalFailure(
+      "GET",
+      `/v1/account/balances/${encodeURIComponent(symbol)}`,
+      "Mettal no devolvió los saldos de la cuenta.",
+    );
   }
 
   return {
@@ -161,18 +232,13 @@ export async function ensureAcquireAccount(options: {
   const country = (options.country ?? METTAL_DEFAULT_COUNTRY)
     .trim()
     .toUpperCase();
-  const response = await fetch(`${METTAL_API_URL}/v1/account/acquire-account`, {
-    method: "POST",
+  const response = await mettalFetch("POST", "/v1/account/acquire-account", {
     headers: {
       Authorization: `Bearer ${options.accessToken}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({ symbol, country }),
   });
-
-  if (!response.ok) {
-    throw new Error(await readMettalError(response));
-  }
 
   const body = (await response.json()) as EnsureAcquireAccountResponse;
   const account = body.data;
@@ -184,7 +250,11 @@ export async function ensureAcquireAccount(options: {
     typeof account.currency !== "string" ||
     !account.currency.trim()
   ) {
-    throw new Error("Mettal no devolvió una cuenta de adquisición.");
+    throw mettalFailure(
+      "POST",
+      "/v1/account/acquire-account",
+      "Mettal no devolvió una cuenta de adquisición.",
+    );
   }
 
   return account;
@@ -197,8 +267,7 @@ export async function issueAcquireChallenge(options: {
   network?: string;
 }): Promise<MettalAcquireChallenge> {
   const network = (options.network ?? METTAL_ACQUIRE_NETWORK).trim().toLowerCase();
-  const response = await fetch(`${METTAL_API_URL}/v1/tokens/acquire-challenge`, {
-    method: "POST",
+  const response = await mettalFetch("POST", "/v1/tokens/acquire-challenge", {
     headers: {
       Authorization: `Bearer ${options.accessToken}`,
       "Content-Type": "application/json",
@@ -209,17 +278,17 @@ export async function issueAcquireChallenge(options: {
     }),
   });
 
-  if (!response.ok) {
-    throw new Error(await readMettalError(response));
-  }
-
   const body = (await response.json()) as AcquireChallengeResponse;
   if (
     !body.success ||
     !body.data?.message?.trim() ||
     !body.data?.expiresAt?.trim()
   ) {
-    throw new Error("Mettal no devolvió un challenge de propiedad.");
+    throw mettalFailure(
+      "POST",
+      "/v1/tokens/acquire-challenge",
+      "Mettal no devolvió un challenge de propiedad.",
+    );
   }
   return body.data;
 }
@@ -236,8 +305,7 @@ export async function acquireTokens(options: {
 }): Promise<MettalAcquireResult> {
   const symbol = (options.symbol ?? METTAL_DEFAULT_SYMBOL).trim().toUpperCase();
   const network = (options.network ?? METTAL_ACQUIRE_NETWORK).trim().toLowerCase();
-  const response = await fetch(`${METTAL_API_URL}/v1/tokens/acquire`, {
-    method: "POST",
+  const response = await mettalFetch("POST", "/v1/tokens/acquire", {
     headers: {
       Authorization: `Bearer ${options.accessToken}`,
       "Content-Type": "application/json",
@@ -252,17 +320,17 @@ export async function acquireTokens(options: {
     }),
   });
 
-  if (!response.ok) {
-    throw new Error(await readMettalError(response));
-  }
-
   const body = (await response.json()) as AcquireTokensResponse;
   if (
     !body.success ||
     !body.data?.workflowId?.trim() ||
     typeof body.data.amount !== "number"
   ) {
-    throw new Error("Mettal no aceptó la solicitud de adquisición.");
+    throw mettalFailure(
+      "POST",
+      "/v1/tokens/acquire",
+      "Mettal no aceptó la solicitud de adquisición.",
+    );
   }
   return body.data;
 }
@@ -337,20 +405,20 @@ export async function listDestinations(options: {
   const qs = options.country
     ? `?country=${encodeURIComponent(options.country)}`
     : "";
-  const response = await fetch(
-    `${METTAL_API_URL}/v1/account/destinations${qs}`,
-    {
-      method: "GET",
-      headers: { Authorization: `Bearer ${options.accessToken}` },
-    },
-  );
-  if (!response.ok) throw new Error(await readMettalError(response));
+  const response = await mettalFetch("GET", "/v1/account/destinations", {
+    headers: { Authorization: `Bearer ${options.accessToken}` },
+    query: qs,
+  });
   const body = (await response.json()) as {
     success: boolean;
     data: MettalDestination[];
   };
   if (!body.success || !Array.isArray(body.data)) {
-    throw new Error("Mettal no devolvió las cuentas bancarias.");
+    throw mettalFailure(
+      "GET",
+      "/v1/account/destinations",
+      "Mettal no devolvió las cuentas bancarias.",
+    );
   }
   return body.data;
 }
@@ -360,8 +428,7 @@ export async function registerDestination(options: {
   bankAccount: string;
   country?: string;
 }): Promise<MettalDestination> {
-  const response = await fetch(`${METTAL_API_URL}/v1/account/destinations`, {
-    method: "POST",
+  const response = await mettalFetch("POST", "/v1/account/destinations", {
     headers: {
       Authorization: `Bearer ${options.accessToken}`,
       "Content-Type": "application/json",
@@ -372,13 +439,16 @@ export async function registerDestination(options: {
       country: options.country ?? METTAL_DEFAULT_COUNTRY,
     }),
   });
-  if (!response.ok) throw new Error(await readMettalError(response));
   const body = (await response.json()) as {
     success: boolean;
     data: MettalDestination;
   };
   if (!body.success || !body.data?.id) {
-    throw new Error("Mettal no registró la cuenta bancaria.");
+    throw mettalFailure(
+      "POST",
+      "/v1/account/destinations",
+      "Mettal no registró la cuenta bancaria.",
+    );
   }
   return body.data;
 }
@@ -387,30 +457,28 @@ export async function deleteDestination(options: {
   accessToken: string;
   id: string;
 }): Promise<void> {
-  const response = await fetch(
-    `${METTAL_API_URL}/v1/account/destinations/${encodeURIComponent(options.id)}`,
-    {
-      method: "DELETE",
-      headers: { Authorization: `Bearer ${options.accessToken}` },
-    },
-  );
-  if (!response.ok) throw new Error(await readMettalError(response));
+  const path = `/v1/account/destinations/${encodeURIComponent(options.id)}`;
+  await mettalFetch("DELETE", path, {
+    headers: { Authorization: `Bearer ${options.accessToken}` },
+  });
 }
 
 export async function getRedeemAddresses(options: {
   accessToken: string;
 }): Promise<MettalRedeemAddress[]> {
-  const response = await fetch(`${METTAL_API_URL}/v1/account/redeem-address`, {
-    method: "GET",
+  const response = await mettalFetch("GET", "/v1/account/redeem-address", {
     headers: { Authorization: `Bearer ${options.accessToken}` },
   });
-  if (!response.ok) throw new Error(await readMettalError(response));
   const body = (await response.json()) as {
     success: boolean;
     data: MettalRedeemAddress[];
   };
   if (!body.success || !Array.isArray(body.data)) {
-    throw new Error("Mettal no devolvió las direcciones de retiro.");
+    throw mettalFailure(
+      "GET",
+      "/v1/account/redeem-address",
+      "Mettal no devolvió las direcciones de retiro.",
+    );
   }
   return body.data;
 }
@@ -423,15 +491,13 @@ export async function ensureRedeemAddress(options: {
 }): Promise<MettalRedeemAddress> {
   const chain = (options.chain ?? METTAL_ACQUIRE_NETWORK).trim().toLowerCase();
   const symbol = (options.symbol ?? METTAL_DEFAULT_SYMBOL).trim().toUpperCase();
-  const response = await fetch(`${METTAL_API_URL}/v1/account/redeem-address`, {
-    method: "POST",
+  const response = await mettalFetch("POST", "/v1/account/redeem-address", {
     headers: {
       Authorization: `Bearer ${options.accessToken}`,
       "Content-Type": "application/json",
     },
     body: JSON.stringify({ chain, symbol }),
   });
-  if (!response.ok) throw new Error(await readMettalError(response));
   const body = (await response.json()) as {
     success: boolean;
     data: MettalRedeemAddress;
@@ -445,7 +511,11 @@ export async function ensureRedeemAddress(options: {
     typeof address.address !== "string" ||
     !address.address.trim()
   ) {
-    throw new Error("Mettal no devolvió una dirección de retiro.");
+    throw mettalFailure(
+      "POST",
+      "/v1/account/redeem-address",
+      "Mettal no devolvió una dirección de retiro.",
+    );
   }
   return address;
 }
@@ -456,8 +526,7 @@ export async function requestRedeemQuote(options: {
   destinationId: string;
   currency?: string;
 }): Promise<MettalRedeemQuote> {
-  const response = await fetch(`${METTAL_API_URL}/v1/redeem/quote`, {
-    method: "POST",
+  const response = await mettalFetch("POST", "/v1/redeem/quote", {
     headers: {
       Authorization: `Bearer ${options.accessToken}`,
       "Content-Type": "application/json",
@@ -468,13 +537,12 @@ export async function requestRedeemQuote(options: {
       destinationId: options.destinationId,
     }),
   });
-  if (!response.ok) throw new Error(await readMettalError(response));
   const body = (await response.json()) as {
     success: boolean;
     data: MettalRedeemQuote;
   };
   if (!body.success || !body.data?.quoteId) {
-    throw new Error("Mettal no emitió una cotización de retiro.");
+    throw mettalFailure("POST", "/v1/redeem/quote", "Mettal no emitió una cotización de retiro.");
   }
   return body.data;
 }
@@ -485,8 +553,7 @@ export async function authorizeRedeem(options: {
   destinationId: string;
   idempotencyKey: string;
 }): Promise<MettalRedeemAuthorizeResult> {
-  const response = await fetch(`${METTAL_API_URL}/v1/redeem`, {
-    method: "POST",
+  const response = await mettalFetch("POST", "/v1/redeem", {
     headers: {
       Authorization: `Bearer ${options.accessToken}`,
       "Content-Type": "application/json",
@@ -497,13 +564,12 @@ export async function authorizeRedeem(options: {
       destinationId: options.destinationId,
     }),
   });
-  if (!response.ok) throw new Error(await readMettalError(response));
   const body = (await response.json()) as {
     success: boolean;
     data: MettalRedeemAuthorizeResult;
   };
   if (!body.success || !body.data?.transactionId) {
-    throw new Error("Mettal no aceptó el retiro.");
+    throw mettalFailure("POST", "/v1/redeem", "Mettal no aceptó el retiro.");
   }
   return body.data;
 }
@@ -512,20 +578,16 @@ export async function getRedeemStatus(options: {
   accessToken: string;
   transactionId: string;
 }): Promise<MettalRedeemStatus> {
-  const response = await fetch(
-    `${METTAL_API_URL}/v1/redeem/status/${encodeURIComponent(options.transactionId)}`,
-    {
-      method: "GET",
-      headers: { Authorization: `Bearer ${options.accessToken}` },
-    },
-  );
-  if (!response.ok) throw new Error(await readMettalError(response));
+  const path = `/v1/redeem/status/${encodeURIComponent(options.transactionId)}`;
+  const response = await mettalFetch("GET", path, {
+    headers: { Authorization: `Bearer ${options.accessToken}` },
+  });
   const body = (await response.json()) as {
     success: boolean;
     data: MettalRedeemStatus;
   };
   if (!body.success || !body.data?.transactionId) {
-    throw new Error("Mettal no devolvió el estado del retiro.");
+    throw mettalFailure("GET", path, "Mettal no devolvió el estado del retiro.");
   }
   return body.data;
 }

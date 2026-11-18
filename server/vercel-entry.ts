@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { acceptClientError, logClientError } from "./client-error.ts";
 import { handleVault } from "./vault-handler.ts";
 
 function header(req: IncomingMessage, name: string): string | null {
@@ -72,6 +73,9 @@ export default async function handler(
     const host = header(req, "x-forwarded-host") ?? header(req, "host") ?? "localhost";
     const proto = header(req, "x-forwarded-proto") ?? "https";
     const url = new URL(req.url ?? "/api/vault", `${proto}://${host}`);
+    const report =
+      url.pathname === "/api/client-error" ||
+      url.searchParams.get("report") === "client-error";
     let body: unknown;
     if (req.method === "POST") {
       const raw = await readRawBody(req);
@@ -82,6 +86,21 @@ export default async function handler(
           body = null;
         }
       }
+    }
+
+    if (report) {
+      if (req.method !== "POST") {
+        sendJson(res, 405, { error: "Método no permitido." }, cors);
+        return;
+      }
+      const accepted = acceptClientError(body);
+      if (!accepted.ok) {
+        sendJson(res, 400, { error: "El reporte no es válido." }, cors);
+        return;
+      }
+      logClientError(accepted.record);
+      sendJson(res, 200, { ok: true }, cors);
+      return;
     }
 
     const result = await handleVault({

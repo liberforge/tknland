@@ -71,5 +71,8 @@
       "maxDuration": 10
     }
   },
-  "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }]
+  "rewrites": [
+    { "source": "/api/client-error", "destination": "/api/vault?report=client-error" },
+    { "source": "/(.*)", "destination": "/index.html" }
+  ]
 }

@@ -1,3 +1,4 @@
+import { clientError } from "@/lib/client-error";
 import { useEffect, useState, type ReactNode } from "react";
 import type { Address } from "viem";
 import { BackupFlow } from "./BackupFlow";
@@ -142,10 +143,10 @@ export function MenuSheet({
         if (cancelled) return;
         setNetwork({
           kind: "error",
-          message:
-            err instanceof Error
-              ? err.message
-              : "No se pudo consultar el saldo de red.",
+          message: clientError(
+            "menu.network",
+            err instanceof Error ? err : "No se pudo consultar el saldo de red.",
+          ),
         });
       }
     })();
@@ -199,7 +200,10 @@ export function MenuSheet({
       onClose();
     } catch (err) {
       setRestoreError(
-        err instanceof Error ? err.message : "No se pudo restaurar la frase.",
+        clientError(
+          "menu.restore",
+          err instanceof Error ? err : "No se pudo restaurar la frase.",
+        ),
       );
     } finally {
       setRestoreBusy(false);

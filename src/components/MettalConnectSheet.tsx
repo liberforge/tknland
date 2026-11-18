@@ -1,3 +1,4 @@
+import { clientError } from "@/lib/client-error";
 import { useEffect, useRef, useState } from "react";
 import QrScanner from "qr-scanner";
 import {
@@ -60,9 +61,12 @@ export function MettalConnectSheet({
             await onCredentials(credentials);
           } catch (err) {
             setError(
-              err instanceof Error
-                ? err.message
-                : "No se pudieron guardar las credenciales.",
+              clientError(
+                "mettal.save",
+                err instanceof Error
+                  ? err
+                  : "No se pudieron guardar las credenciales.",
+              ),
             );
           } finally {
             setSaving(false);
@@ -83,9 +87,12 @@ export function MettalConnectSheet({
       if (cancelled) return;
       setScanning(false);
       setError(
-        err instanceof Error
-          ? `No se pudo abrir la cámara: ${err.message}`
-          : "No se pudo abrir la cámara.",
+        clientError(
+          "mettal.camera",
+          err instanceof Error
+            ? `No se pudo abrir la cámara: ${err.message}`
+            : "No se pudo abrir la cámara.",
+        ),
       );
     });
 

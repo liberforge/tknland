@@ -1,3 +1,4 @@
+import { clientError } from "@/lib/client-error";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import type { Hash } from "viem";
 import {
@@ -238,7 +239,10 @@ export function HandshakeSheet({
       if (match.kind === "mismatch") {
         apply({
           kind: "error",
-          message: match.reason,
+          message:
+            match.reason === "Monto inválido en el enlace."
+              ? match.reason
+              : clientError("pay.match", match.reason),
         });
         return;
       }
@@ -293,10 +297,10 @@ export function HandshakeSheet({
       if (!cancelled) {
         apply({
           kind: "error",
-          message:
-            err instanceof Error
-              ? err.message
-              : "No se pudo abrir el enlace.",
+          message: clientError(
+            "pay.open",
+            err instanceof Error ? err : "No se pudo abrir el enlace.",
+          ),
         });
       }
     }
@@ -395,10 +399,10 @@ export function HandshakeSheet({
       }
       setStep({
         kind: "error",
-        message:
-          err instanceof Error
-            ? err.message
-            : "No se pudo aceptar el envío.",
+          message: clientError(
+            "pay.accept",
+            err instanceof Error ? err : "No se pudo aceptar el envío.",
+          ),
       });
     }
   }
@@ -428,7 +432,7 @@ export function HandshakeSheet({
     if (step.kind !== "confirm" || !vault) {
       setStep({
         kind: "error",
-        message: "Necesitas una billetera para enviar.",
+        message: clientError("pay.wallet", "Necesitas una billetera para enviar."),
       });
       return;
     }
@@ -441,8 +445,10 @@ export function HandshakeSheet({
     ) {
       setStep({
         kind: "error",
-        message:
+        message: clientError(
+          "pay.simulate",
           "Esta vista simula otra dirección y no puede firmar. Quita la simulación en el menú para enviar.",
+        ),
       });
       return;
     }
@@ -511,8 +517,10 @@ export function HandshakeSheet({
     } catch (err) {
       setStep({
         kind: "error",
-        message:
-          err instanceof Error ? err.message : "No se pudo completar el envío.",
+        message: clientError(
+          "pay.send",
+          err instanceof Error ? err : "No se pudo completar el envío.",
+        ),
       });
     }
   }

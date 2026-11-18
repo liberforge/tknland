@@ -9,6 +9,8 @@ import {
   formatMettalMajorGrouped,
   getAccountBalances,
   getRedeemStatus,
+  forgetMettalAccessToken,
+  isFetchFailure,
   issueMettalAccessToken,
   listDestinations,
   METTAL_ACQUIRE_NETWORK,
@@ -26,6 +28,7 @@ import {
   withMettalCredentialsAndSeed,
   type MettalCredentials,
 } from "@/lib/mettal/credentials";
+import { clientError, reportClientError } from "@/lib/client-error";
 import { getPenmtBalance } from "@/lib/evm/penmt";
 import {
   getPenmtFeePreview,
@@ -37,6 +40,11 @@ import type { DeviceVaultRecord, VaultAccount } from "@/lib/vault/types";
 
 const REDEEM_BALANCE_POLL_MS = 7_000;
 const REDEEM_STATUS_POLL_MS = 5_000;
+const WITHDRAW_RETRY_MS = 5_000;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
 
 type WithdrawSession = {
   credentials: MettalCredentials;
@@ -147,7 +155,9 @@ export function WithdrawSheet({
   }
 
   async function refreshAccessToken(session: WithdrawSession): Promise<string> {
-    const accessToken = await issueMettalAccessToken(session.credentials);
+    const accessToken = await issueMettalAccessToken(session.credentials, {
+      force: true,
+    });
     session.accessToken = accessToken;
     return accessToken;
   }
@@ -169,7 +179,10 @@ export function WithdrawSheet({
     if (!vaultAtOpen) {
       setStep({
         kind: "error",
-        message: "Abre la app para cargar la cuenta con biometría.",
+        message: clientError(
+          "withdraw.vault",
+          "Abre la app para cargar la cuenta con biometría.",
+        ),
       });
       return;
     }
@@ -189,7 +202,6 @@ export function WithdrawSheet({
         const unlocked = await withMettalCredentialsAndSeed(
           vaultAtOpen,
           async ({ credentials, mnemonic }) => {
-            const accessToken = await issueMettalAccessToken(credentials);
             const {
               vault: nextVault,
               account,
@@ -197,7 +209,6 @@ export function WithdrawSheet({
             } = await ensurePrimaryEvmAccount(vaultAtOpen, mnemonic);
             return {
               credentials,
-              accessToken,
               account,
               signer,
               nextVault,
@@ -208,57 +219,114 @@ export function WithdrawSheet({
 
         sessionRef.current = {
           credentials: unlocked.credentials,
-          accessToken: unlocked.accessToken,
+          accessToken: "",
           account: unlocked.account,
           signer: unlocked.signer,
           redeemBalanceMinor: 0,
         };
         onVaultUpdatedRef.current?.(unlocked.nextVault);
-
-        setStep({
-          kind: "loading",
-          message: "Consultando tu cuenta en Mettal…",
-        });
-
-        const [banks, onChain, balances] = await Promise.all([
-          listDestinations({
-            accessToken: unlocked.accessToken,
-            country: METTAL_DEFAULT_COUNTRY,
-          }),
-          getPenmtBalance(unlocked.account.address),
-          getAccountBalances({ accessToken: unlocked.accessToken }),
-        ]);
-        if (cancelled) return;
-
-        if (sessionRef.current) {
-          sessionRef.current.redeemBalanceMinor = balances.redeemBalance;
-        }
-
-        if (banks.length === 0) {
-          setStep({
-            kind: "register-bank",
-            banks: [],
-            onChainFormatted: onChain.formatted,
-          });
-          return;
-        }
-
-        setStep({
-          kind: "bank",
-          banks,
-          selectedId: banks[0]?.id ?? null,
-          onChainFormatted: onChain.formatted,
-        });
       } catch (err) {
         if (cancelled) return;
         clearSession();
         setStep({
           kind: "error",
-          message:
-            err instanceof Error
-              ? err.message
-              : "No se pudo iniciar el retiro.",
+          message: clientError(
+            "withdraw.unlock",
+            err instanceof Error ? err : "No se pudo iniciar el retiro.",
+          ),
         });
+        return;
+      }
+
+      while (!cancelled && sessionRef.current) {
+        const session: WithdrawSession = sessionRef.current;
+        setStep({
+          kind: "loading",
+          message: "Consultando tu cuenta en Mettal…",
+        });
+        try {
+          const accessToken = await issueMettalAccessToken(session.credentials);
+          if (cancelled || sessionRef.current !== session) return;
+          session.accessToken = accessToken;
+
+          const [banks, balances] = await Promise.all([
+            listDestinations({
+              accessToken,
+              country: METTAL_DEFAULT_COUNTRY,
+            }),
+            getAccountBalances({ accessToken }),
+          ]);
+          if (cancelled || sessionRef.current !== session) return;
+
+          let onChainFormatted = "0.00";
+          try {
+            const onChain = await getPenmtBalance(session.account.address);
+            onChainFormatted = onChain.formatted;
+          } catch (err) {
+            reportClientError("withdraw.chain", err);
+          }
+          if (cancelled || sessionRef.current !== session) return;
+
+          session.redeemBalanceMinor = balances.redeemBalance;
+
+          if (banks.length === 0) {
+            setStep({
+              kind: "register-bank",
+              banks: [],
+              onChainFormatted,
+            });
+            return;
+          }
+
+          if (balances.redeemBalance >= METTAL_REDEEM_FIRST_MINOR) {
+            const bank = banks[0];
+            if (!bank) {
+              setStep({
+                kind: "register-bank",
+                banks: [],
+                onChainFormatted,
+              });
+              return;
+            }
+            setAmountInput(formatMettalMajor(balances.redeemBalance));
+            setStep({
+              kind: "amount-mettal",
+              banks,
+              selectedId: bank.id,
+              redeemBalanceMinor: balances.redeemBalance,
+              redeemFormatted: formatMettalMajorGrouped(balances.redeemBalance),
+            });
+            return;
+          }
+
+          setStep({
+            kind: "bank",
+            banks,
+            selectedId: banks[0]?.id ?? null,
+            onChainFormatted,
+          });
+          return;
+        } catch (err) {
+          if (cancelled || sessionRef.current !== session) return;
+          if (!isFetchFailure(err)) {
+            forgetMettalAccessToken(session.credentials);
+            clearSession();
+            setStep({
+              kind: "error",
+              message: clientError(
+                "withdraw.load",
+                err instanceof Error ? err : "No se pudo iniciar el retiro.",
+              ),
+            });
+            return;
+          }
+          reportClientError("withdraw.load.retry", err);
+          setStep({
+            kind: "loading",
+            message: "La conexión falló. Reintentando…",
+          });
+          await sleep(WITHDRAW_RETRY_MS);
+        }
       }
     })();
 
@@ -284,7 +352,8 @@ export function WithdrawSheet({
           balances = await getAccountBalances({
             accessToken: session.accessToken,
           });
-        } catch {
+        } catch (err) {
+          reportClientError("withdraw.redeem.retry", err);
           const accessToken = await refreshAccessToken(session);
           balances = await getAccountBalances({ accessToken });
         }
@@ -293,8 +362,8 @@ export function WithdrawSheet({
           setStep({ kind: "working", message: "Obteniendo cotización…" });
           void requestFiatRedeemQuote(target);
         }
-      } catch {
-        // keep polling
+      } catch (err) {
+        reportClientError("withdraw.redeem.retry", err);
       } finally {
         inFlight = false;
       }
@@ -327,7 +396,8 @@ export function WithdrawSheet({
             accessToken: session.accessToken,
             transactionId,
           });
-        } catch {
+        } catch (err) {
+          reportClientError("withdraw.payout.retry", err);
           const accessToken = await refreshAccessToken(session);
           status = await getRedeemStatus({ accessToken, transactionId });
         }
@@ -345,11 +415,14 @@ export function WithdrawSheet({
         if (status.status === "failed") {
           setStep({
             kind: "error",
-            message: "El retiro bancario falló. Inténtalo de nuevo más tarde.",
+            message: clientError(
+              "withdraw.payout",
+              "El retiro bancario falló. Inténtalo de nuevo más tarde.",
+            ),
           });
         }
-      } catch {
-        // keep polling
+      } catch (err) {
+        reportClientError("withdraw.payout.retry", err);
       } finally {
         inFlight = false;
       }
@@ -368,7 +441,10 @@ export function WithdrawSheet({
   async function requestFiatRedeemQuote(amountMinor: number) {
     const session = sessionRef.current;
     if (!session) {
-      setStep({ kind: "error", message: "La sesión expiró." });
+      setStep({
+        kind: "error",
+        message: clientError("withdraw.session", "La sesión expiró."),
+      });
       return;
     }
 
@@ -376,42 +452,88 @@ export function WithdrawSheet({
     if (!bankId) {
       setStep({
         kind: "error",
-        message: "Selecciona una cuenta bancaria e inténtalo de nuevo.",
+        message: clientError(
+          "withdraw.bank",
+          "Selecciona una cuenta bancaria e inténtalo de nuevo.",
+        ),
       });
       return;
     }
 
     try {
-      let accessToken = session.accessToken;
-      let quote;
-      try {
-        quote = await requestRedeemQuote({
-          accessToken,
-          amount: amountMinor,
-          destinationId: bankId,
-        });
-      } catch {
-        accessToken = await refreshAccessToken(session);
-        quote = await requestRedeemQuote({
-          accessToken,
-          amount: amountMinor,
-          destinationId: bankId,
-        });
+      while (sessionRef.current === session) {
+        let accessToken = session.accessToken;
+        try {
+          if (!accessToken) {
+            accessToken = await issueMettalAccessToken(session.credentials);
+            session.accessToken = accessToken;
+          }
+          const quote = await requestRedeemQuote({
+            accessToken,
+            amount: amountMinor,
+            destinationId: bankId,
+          });
+          if (sessionRef.current !== session) return;
+          setStep({
+            kind: "confirm-quote",
+            quote,
+            amountMinor,
+            bankAccount: session.selectedBankAccount ?? "",
+          });
+          return;
+        } catch (err) {
+          if (sessionRef.current !== session) return;
+          let failed: unknown = err;
+          if (!isFetchFailure(err)) {
+            reportClientError("withdraw.quote.retry", err);
+            try {
+              accessToken = await refreshAccessToken(session);
+              const quote = await requestRedeemQuote({
+                accessToken,
+                amount: amountMinor,
+                destinationId: bankId,
+              });
+              if (sessionRef.current !== session) return;
+              setStep({
+                kind: "confirm-quote",
+                quote,
+                amountMinor,
+                bankAccount: session.selectedBankAccount ?? "",
+              });
+              return;
+            } catch (retryErr) {
+              if (sessionRef.current !== session) return;
+              if (!isFetchFailure(retryErr)) {
+                setStep({
+                  kind: "error",
+                  message: clientError(
+                    "withdraw.quote",
+                    retryErr instanceof Error
+                      ? retryErr
+                      : "No se pudo obtener la cotización del retiro.",
+                  ),
+                });
+                return;
+              }
+              failed = retryErr;
+            }
+          }
+          reportClientError("withdraw.quote.retry", failed);
+          setStep({
+            kind: "working",
+            message: "La conexión falló. Reintentando la cotización…",
+          });
+          await sleep(WITHDRAW_RETRY_MS);
+        }
       }
-
-      setStep({
-        kind: "confirm-quote",
-        quote,
-        amountMinor,
-        bankAccount: session.selectedBankAccount ?? "",
-      });
     } catch (err) {
+      if (sessionRef.current !== session) return;
       setStep({
         kind: "error",
-        message:
-          err instanceof Error
-            ? err.message
-            : "No se pudo obtener la cotización del retiro.",
+        message: clientError(
+          "withdraw.quote",
+          err instanceof Error ? err : "No se pudo obtener la cotización del retiro.",
+        ),
       });
     }
   }
@@ -420,7 +542,10 @@ export function WithdrawSheet({
     if (step.kind !== "confirm-quote") return;
     const session = sessionRef.current;
     if (!session) {
-      setStep({ kind: "error", message: "La sesión expiró." });
+      setStep({
+        kind: "error",
+        message: clientError("withdraw.session", "La sesión expiró."),
+      });
       return;
     }
 
@@ -428,7 +553,10 @@ export function WithdrawSheet({
     if (!bankId) {
       setStep({
         kind: "error",
-        message: "Selecciona una cuenta bancaria e inténtalo de nuevo.",
+        message: clientError(
+          "withdraw.bank",
+          "Selecciona una cuenta bancaria e inténtalo de nuevo.",
+        ),
       });
       return;
     }
@@ -439,48 +567,95 @@ export function WithdrawSheet({
     setStep({ kind: "working", message: "Confirmando retiro…" });
 
     try {
-      let accessToken = session.accessToken;
-      let result;
-      try {
-        result = await authorizeRedeem({
-          accessToken,
-          quoteId,
-          destinationId: bankId,
-          idempotencyKey,
-        });
-      } catch {
-        accessToken = await refreshAccessToken(session);
-        result = await authorizeRedeem({
-          accessToken,
-          quoteId,
-          destinationId: bankId,
-          idempotencyKey,
-        });
-      }
-
-      if (result.status === "success") {
+      while (sessionRef.current === session) {
+        let accessToken = session.accessToken;
         try {
-          const balance = await getPenmtBalance(session.account.address);
-          onBalanceConfirmedRef.current?.(balance.formatted);
-        } catch {
-          // ignore
+          const result = await authorizeRedeem({
+            accessToken,
+            quoteId,
+            destinationId: bankId,
+            idempotencyKey,
+          });
+          if (sessionRef.current !== session) return;
+          if (result.status === "success") {
+            try {
+              const balance = await getPenmtBalance(session.account.address);
+              onBalanceConfirmedRef.current?.(balance.formatted);
+            } catch {
+              // ignore
+            }
+            setStep({ kind: "success", amountMinor });
+            return;
+          }
+          setStep({
+            kind: "waiting-payout",
+            transactionId: result.transactionId,
+            amountMinor,
+          });
+          return;
+        } catch (err) {
+          if (sessionRef.current !== session) return;
+          let failed: unknown = err;
+          if (!isFetchFailure(err)) {
+            reportClientError("withdraw.confirm.retry", err);
+            try {
+              accessToken = await refreshAccessToken(session);
+              const result = await authorizeRedeem({
+                accessToken,
+                quoteId,
+                destinationId: bankId,
+                idempotencyKey,
+              });
+              if (sessionRef.current !== session) return;
+              if (result.status === "success") {
+                try {
+                  const balance = await getPenmtBalance(session.account.address);
+                  onBalanceConfirmedRef.current?.(balance.formatted);
+                } catch {
+                  // ignore
+                }
+                setStep({ kind: "success", amountMinor });
+                return;
+              }
+              setStep({
+                kind: "waiting-payout",
+                transactionId: result.transactionId,
+                amountMinor,
+              });
+              return;
+            } catch (retryErr) {
+              if (sessionRef.current !== session) return;
+              if (!isFetchFailure(retryErr)) {
+                setStep({
+                  kind: "error",
+                  message: clientError(
+                    "withdraw.confirm",
+                    retryErr instanceof Error
+                      ? retryErr
+                      : "No se pudo completar el retiro bancario.",
+                  ),
+                });
+                return;
+              }
+              failed = retryErr;
+            }
+          }
+          reportClientError("withdraw.confirm.retry", failed);
+          setStep({
+            kind: "working",
+            message: "La conexión falló. Reintentando el retiro…",
+          });
+          await sleep(WITHDRAW_RETRY_MS);
         }
-        setStep({ kind: "success", amountMinor });
-        return;
       }
-
-      setStep({
-        kind: "waiting-payout",
-        transactionId: result.transactionId,
-        amountMinor,
-      });
     } catch (err) {
+      if (sessionRef.current !== session) return;
       setStep({
         kind: "error",
-        message:
-          err instanceof Error
-            ? err.message
-            : "No se pudo completar el retiro bancario.",
+        message: clientError(
+          "withdraw.confirm",
+          err instanceof Error ? err : "No se pudo completar el retiro bancario.",
+        ),
       });
     }
   }
@@ -576,9 +751,10 @@ export function WithdrawSheet({
         onChainFormatted: step.onChainFormatted,
       });
       setBankError(
-        err instanceof Error
-          ? err.message
-          : "No se pudo registrar la cuenta bancaria.",
+        clientError(
+          "withdraw.register",
+          err instanceof Error ? err : "No se pudo registrar la cuenta bancaria.",
+        ),
       );
     }
   }
@@ -587,31 +763,50 @@ export function WithdrawSheet({
     if (step.kind !== "bank" || !step.selectedId) return;
     const session = sessionRef.current;
     if (!session) return;
+    const banks = step.banks;
+    const selectedId = step.selectedId;
+    const onChainFormatted = step.onChainFormatted;
 
     setStep({ kind: "working", message: "Consultando saldo Mettal…" });
-    try {
-      let accessToken = session.accessToken;
-      let balances;
+    while (sessionRef.current === session) {
       try {
-        balances = await getAccountBalances({ accessToken });
-      } catch {
-        accessToken = await refreshAccessToken(session);
-        balances = await getAccountBalances({ accessToken });
+        let accessToken = session.accessToken;
+        if (!accessToken) {
+          accessToken = await issueMettalAccessToken(session.credentials);
+          session.accessToken = accessToken;
+        }
+        let balances;
+        try {
+          balances = await getAccountBalances({ accessToken });
+        } catch (err) {
+          if (isFetchFailure(err)) throw err;
+          reportClientError("withdraw.balance.retry", err);
+          accessToken = await refreshAccessToken(session);
+          balances = await getAccountBalances({ accessToken });
+        }
+        if (sessionRef.current !== session) return;
+        session.redeemBalanceMinor = balances.redeemBalance;
+        goToAmountStep({ banks, selectedId, onChainFormatted });
+        return;
+      } catch (err) {
+        if (sessionRef.current !== session) return;
+        if (!isFetchFailure(err)) {
+          setStep({
+            kind: "error",
+            message: clientError(
+              "withdraw.balance",
+              err instanceof Error ? err : "No se pudo consultar el saldo de retiro.",
+            ),
+          });
+          return;
+        }
+        reportClientError("withdraw.balance.retry", err);
+        setStep({
+          kind: "working",
+          message: "La conexión falló. Reintentando…",
+        });
+        await sleep(WITHDRAW_RETRY_MS);
       }
-      session.redeemBalanceMinor = balances.redeemBalance;
-      goToAmountStep({
-        banks: step.banks,
-        selectedId: step.selectedId,
-        onChainFormatted: step.onChainFormatted,
-      });
-    } catch (err) {
-      setStep({
-        kind: "error",
-        message:
-          err instanceof Error
-            ? err.message
-            : "No se pudo consultar el saldo de retiro.",
-      });
     }
   }
 
@@ -619,7 +814,10 @@ export function WithdrawSheet({
     if (step.kind !== "amount-mettal") return;
     const session = sessionRef.current;
     if (!session) {
-      setStep({ kind: "error", message: "La sesión expiró." });
+      setStep({
+        kind: "error",
+        message: clientError("withdraw.session", "La sesión expiró."),
+      });
       return;
     }
 
@@ -633,9 +831,7 @@ export function WithdrawSheet({
       return;
     }
     if (minor > step.redeemBalanceMinor) {
-      setAmountError(
-        `El máximo disponible es S/ ${step.redeemFormatted}.`,
-      );
+      setAmountError(`El máximo disponible es S/ ${step.redeemFormatted}.`);
       return;
     }
 
@@ -652,7 +848,10 @@ export function WithdrawSheet({
     if (step.kind !== "amount") return;
     const session = sessionRef.current;
     if (!session) {
-      setStep({ kind: "error", message: "La sesión expiró." });
+      setStep({
+        kind: "error",
+        message: clientError("withdraw.session", "La sesión expiró."),
+      });
       return;
     }
 
@@ -670,9 +869,7 @@ export function WithdrawSheet({
       Number(step.onChainFormatted.replace(/,/g, "")) * METTAL_MINOR_UNIT_SCALE,
     );
     if (!Number.isFinite(onChainMinor) || minor > onChainMinor) {
-      setAmountError(
-        `El máximo disponible es S/ ${step.onChainFormatted}.`,
-      );
+      setAmountError(`El máximo disponible es S/ ${step.onChainFormatted}.`);
       return;
     }
 
@@ -729,8 +926,10 @@ export function WithdrawSheet({
     } catch (err) {
       setStep({
         kind: "error",
-        message:
-          err instanceof Error ? err.message : "No se pudo enviar el retiro.",
+        message: clientError(
+          "withdraw.send",
+          err instanceof Error ? err : "No se pudo enviar el retiro.",
+        ),
       });
     }
   }
@@ -770,10 +969,10 @@ export function WithdrawSheet({
     } catch (err) {
       setStep({
         kind: "error",
-        message:
-          err instanceof Error
-            ? err.message
-            : "No se pudo eliminar la cuenta bancaria.",
+        message: clientError(
+          "withdraw.delete",
+          err instanceof Error ? err : "No se pudo eliminar la cuenta bancaria.",
+        ),
       });
     }
   }

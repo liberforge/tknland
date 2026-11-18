@@ -1,3 +1,4 @@
+import { clientError } from "@/lib/client-error";
 import { useEffect, useRef, useState } from "react";
 
 type QuizQuestion = {
@@ -236,9 +237,10 @@ export function BackupFlow({
       }
     } catch (err) {
       setError(
-        err instanceof Error
-          ? err.message
-          : "No se pudo revelar la frase secreta.",
+        clientError(
+          "backup.reveal",
+          err instanceof Error ? err : "No se pudo revelar la frase secreta.",
+        ),
       );
     } finally {
       setBusy(false);

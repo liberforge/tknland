@@ -1,3 +1,4 @@
+import { clientError, reportClientError } from "@/lib/client-error";
 import { useEffect, useRef, useState } from "react";
 import type { PrivateKeyAccount } from "viem/accounts";
 import {
@@ -98,7 +99,9 @@ export function AcquireDepositSheet({
   }
 
   async function refreshAccessToken(session: AcquireSession): Promise<string> {
-    const accessToken = await issueMettalAccessToken(session.credentials);
+    const accessToken = await issueMettalAccessToken(session.credentials, {
+      force: true,
+    });
     session.accessToken = accessToken;
     return accessToken;
   }
@@ -120,8 +123,10 @@ export function AcquireDepositSheet({
     if (!vaultAtOpen) {
       setStep({
         kind: "error",
-        message:
+        message: clientError(
+          "deposit.vault",
           "Abre http://localhost:5173 para cargar la cuenta con biometría.",
+        ),
       });
       return;
     }
@@ -200,10 +205,10 @@ export function AcquireDepositSheet({
         clearSession();
         setStep({
           kind: "error",
-          message:
-            err instanceof Error
-              ? err.message
-              : "No se pudo consultar el saldo de adquisición.",
+          message: clientError(
+            "deposit.open",
+            err instanceof Error ? err : "No se pudo consultar el saldo de adquisición.",
+          ),
         });
       }
     })();
@@ -218,7 +223,10 @@ export function AcquireDepositSheet({
     if (!session) {
       setStep({
         kind: "error",
-        message: "La sesión expiró. Cierra e inténtalo de nuevo.",
+        message: clientError(
+          "deposit.session",
+          "La sesión expiró. Cierra e inténtalo de nuevo.",
+        ),
       });
       return;
     }
@@ -283,10 +291,10 @@ export function AcquireDepositSheet({
       if (sessionRef.current !== session) return;
       setStep({
         kind: "error",
-        message:
-          err instanceof Error
-            ? err.message
-            : "No se pudo agregar PENMT a tu billetera.",
+        message: clientError(
+          "deposit.acquire",
+          err instanceof Error ? err : "No se pudo agregar PENMT a tu billetera.",
+        ),
       });
     }
   }
@@ -307,7 +315,8 @@ export function AcquireDepositSheet({
           balances = await getAccountBalances({
             accessToken: session.accessToken,
           });
-        } catch {
+        } catch (err) {
+          reportClientError("deposit.wait.retry", err);
           const accessToken = await refreshAccessToken(session);
           if (cancelled) return;
           balances = await getAccountBalances({ accessToken });
@@ -323,8 +332,8 @@ export function AcquireDepositSheet({
           return;
         }
         await startAcquire(arrived);
-      } catch {
-        // Keep waiting; bank credits can take a while and transient errors are OK.
+      } catch (err) {
+        reportClientError("deposit.wait.retry", err);
       } finally {
         inFlight = false;
       }
@@ -364,8 +373,8 @@ export function AcquireDepositSheet({
             balanceFormatted: balance.formatted,
           });
         }
-      } catch {
-        // Keep waiting; RPC/mint delays are expected.
+      } catch (err) {
+        reportClientError("deposit.receipt.retry", err);
       } finally {
         inFlight = false;
       }
@@ -392,7 +401,7 @@ export function AcquireDepositSheet({
     } catch {
       setStep({
         kind: "error",
-        message: "No se pudo copiar el número de cuenta.",
+        message: clientError("deposit.copy", "No se pudo copiar el número de cuenta."),
       });
     }
   }
@@ -591,7 +600,10 @@ export function AcquireDepositSheet({
               </span>{" "}
               {step.result.symbol} a tu billetera.
             </p>
-            <p className="mt-4 text-center text-3xl font-semibold tabular-nums tracking-tight text-accent">
+            <p className="mt-5 text-center text-sm text-ink-muted">
+              Tu saldo actual es
+            </p>
+            <p className="mt-1 text-center text-3xl font-semibold tabular-nums tracking-tight text-accent">
               {step.balanceFormatted}{" "}
               <span className="text-sm font-medium text-accent-soft">PENMT</span>
             </p>

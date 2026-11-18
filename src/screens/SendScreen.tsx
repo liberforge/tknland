@@ -1,3 +1,4 @@
+import { clientError } from "@/lib/client-error";
 import { useEffect, useState, type FormEvent } from "react";
 import {
   buildInviteLink,
@@ -177,8 +178,10 @@ export function SendScreen({
     } catch (err) {
       setStep({
         kind: "error",
-        message:
-          err instanceof Error ? err.message : "No se pudo preparar el envío.",
+        message: clientError(
+          "send.invite",
+          err instanceof Error ? err : "No se pudo preparar el envío.",
+        ),
       });
     }
   }
@@ -187,7 +190,7 @@ export function SendScreen({
     if (!vault) {
       setStep({
         kind: "error",
-        message: "Crea tu billetera antes de pedir dinero.",
+        message: clientError("send.request", "Crea tu billetera antes de pedir dinero."),
       });
       return;
     }
@@ -243,8 +246,10 @@ export function SendScreen({
     } catch (err) {
       setStep({
         kind: "error",
-        message:
-          err instanceof Error ? err.message : "No se pudo preparar el pedido.",
+        message: clientError(
+          "send.request",
+          err instanceof Error ? err : "No se pudo preparar el pedido.",
+        ),
       });
     }
   }

@@ -1,6 +1,7 @@
 import { execSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { acceptClientError, logClientError } from "./server/client-error.ts";
 import { defineConfig, loadEnv, type Connect, type Plugin, type ViteDevServer } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
@@ -75,6 +76,39 @@ function vaultApiDev(): Plugin {
   const attach = (server: ViteDevServer) => {
     server.middlewares.use((req, res, next) => {
       const path = req.url?.split("?")[0];
+      if (path === "/api/client-error") {
+        void (async () => {
+          try {
+            let body: unknown = null;
+            if (req.method === "POST") {
+              const raw = await readBody(req);
+              if (raw) {
+                try {
+                  body = JSON.parse(raw) as unknown;
+                } catch {
+                  body = null;
+                }
+              }
+            }
+            const accepted = acceptClientError(body);
+            if (!accepted.ok) {
+              res.statusCode = 400;
+              res.setHeader("content-type", "application/json; charset=utf-8");
+              res.end(JSON.stringify({ error: "El reporte no es válido." }));
+              return;
+            }
+            logClientError(accepted.record);
+            res.statusCode = 200;
+            res.setHeader("content-type", "application/json; charset=utf-8");
+            res.end(JSON.stringify({ ok: true }));
+          } catch (err) {
+            console.error(err);
+            res.statusCode = 500;
+            res.end();
+          }
+        })();
+        return;
+      }
       if (path !== "/api/vault") return next();
       void (async () => {
         try {

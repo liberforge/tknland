@@ -1,3 +1,4 @@
+import { RequestError } from "@/lib/client-error";
 import { base64UrlToBytes, bytesToBase64Url } from "@/lib/bytes";
 
 const VAULT_PATH = "/api/vault";
@@ -33,6 +34,25 @@ function withoutPrfOutput(
   };
 }
 
+async function vaultFetch(
+  method: "GET" | "POST",
+  url: string,
+  body?: string,
+): Promise<Response> {
+  try {
+    return await fetch(url, {
+      method,
+      headers: body ? { "content-type": "application/json" } : undefined,
+      cache: "no-store",
+      body,
+    });
+  } catch (err) {
+    const message =
+      err instanceof Error && err.message ? err.message : "Failed to fetch";
+    throw new RequestError(method, VAULT_PATH, message);
+  }
+}
+
 async function errorMessage(res: Response): Promise<string> {
   try {
     const body = (await res.json()) as { error?: unknown };
@@ -44,27 +64,21 @@ async function errorMessage(res: Response): Promise<string> {
 }
 
 async function postVault(body: unknown): Promise<void> {
-  const res = await fetch(vaultUrl(), {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    cache: "no-store",
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) throw new Error(await errorMessage(res));
+  const res = await vaultFetch("POST", vaultUrl(), JSON.stringify(body));
+  if (!res.ok) throw new RequestError("POST", VAULT_PATH, await errorMessage(res));
 }
 
 /** One-time server challenge. The passkey ceremony must use these exact bytes. */
 export async function fetchChallengeBytes(): Promise<Uint8Array> {
-  const res = await fetch(vaultUrl(), {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    cache: "no-store",
-    body: JSON.stringify({ op: "challenge" }),
-  });
-  if (!res.ok) throw new Error(await errorMessage(res));
+  const res = await vaultFetch(
+    "POST",
+    vaultUrl(),
+    JSON.stringify({ op: "challenge" }),
+  );
+  if (!res.ok) throw new RequestError("POST", VAULT_PATH, await errorMessage(res));
   const body = (await res.json()) as { challenge?: unknown };
   if (typeof body.challenge !== "string" || !body.challenge) {
-    throw new Error("El almacén no entregó un reto.");
+    throw new RequestError("POST", VAULT_PATH, "El almacén no entregó un reto.");
   }
   return base64UrlToBytes(body.challenge);
 }
@@ -79,12 +93,12 @@ export type RemoteVaultRow = {
 export async function fetchRemoteVault(
   credentialId: string,
 ): Promise<RemoteVaultRow | null> {
-  const res = await fetch(
+  const res = await vaultFetch(
+    "GET",
     `${vaultUrl()}?credentialId=${encodeURIComponent(credentialId)}`,
-    { cache: "no-store" },
   );
   if (res.status === 404) return null;
-  if (!res.ok) throw new Error(await errorMessage(res));
+  if (!res.ok) throw new RequestError("GET", VAULT_PATH, await errorMessage(res));
   const body = (await res.json()) as { blob?: unknown; publicKey?: unknown };
   if (typeof body.blob !== "string" || !body.blob) return null;
   const publicKey =
