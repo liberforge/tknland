@@ -1,4 +1,5 @@
 {
+  "ignoreCommand": "git diff --quiet HEAD^ HEAD -- . ':(exclude)README.md' ':(exclude)AGENTS.md'",
   "headers": [
     {
       "source": "/",
