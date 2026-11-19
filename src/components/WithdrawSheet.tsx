@@ -112,20 +112,35 @@ type SheetStep =
   | { kind: "success"; amountMinor: number }
   | { kind: "error"; message: string };
 
-function BankAccountLines({ account }: { account: string }) {
+function solesPlaceLabel(currency: string, country: string): string {
+  const money = currency.trim().toUpperCase() === "PEN" ? "Soles" : currency.trim();
+  const place = country.trim().toUpperCase() === "PE" ? "Perú" : country.trim();
+  if (money && place) return `${money} · ${place}`;
+  return money || place;
+}
+
+function BankAccountLines({
+  account,
+  currency,
+  country,
+}: {
+  account: string;
+  currency: string;
+  country: string;
+}) {
   const name = peruBankName(account);
+  const place = solesPlaceLabel(currency, country);
   return (
     <>
-      {name ? (
-        <span className="block text-sm font-semibold text-ink">{name}</span>
-      ) : null}
-      <span
-        className={`block font-mono text-base text-ink ${
-          name ? "mt-1 font-medium" : "font-semibold"
-        }`}
-      >
+      <span className="block break-all font-mono text-base font-semibold text-ink">
         {account}
       </span>
+      {name ? (
+        <span className="mt-1 block text-sm font-semibold text-ink">{name}</span>
+      ) : null}
+      {place ? (
+        <span className="mt-1 block text-xs text-ink-muted">{place}</span>
+      ) : null}
     </>
   );
 }
@@ -135,10 +150,12 @@ function WithdrawBankHeading({ account }: { account: string }) {
   if (!name && !account) return null;
   return (
     <div className="mt-4">
-      {name ? <p className="text-sm font-semibold text-ink">{name}</p> : null}
       {account ? (
-        <p className={`break-all font-mono text-sm text-ink-muted ${name ? "mt-1" : ""}`}>
-          {account}
+        <p className="break-all font-mono text-sm text-ink">{account}</p>
+      ) : null}
+      {name ? (
+        <p className={`text-sm font-semibold text-ink ${account ? "mt-1" : ""}`}>
+          {name}
         </p>
       ) : null}
     </div>
@@ -312,31 +329,10 @@ export function WithdrawSheet({
             return;
           }
 
-          if (balances.redeemBalance >= METTAL_REDEEM_FIRST_MINOR) {
-            const bank = banks[0];
-            if (!bank) {
-              setStep({
-                kind: "register-bank",
-                banks: [],
-                onChainFormatted,
-              });
-              return;
-            }
-            setAmountInput(formatMettalMajor(balances.redeemBalance));
-            setStep({
-              kind: "amount-mettal",
-              banks,
-              selectedId: bank.id,
-              redeemBalanceMinor: balances.redeemBalance,
-              redeemFormatted: formatMettalMajorGrouped(balances.redeemBalance),
-            });
-            return;
-          }
-
           setStep({
             kind: "bank",
             banks,
-            selectedId: banks[0]?.id ?? null,
+            selectedId: banks.length === 1 ? (banks[0]?.id ?? null) : null,
             onChainFormatted,
           });
           return;
@@ -703,6 +699,7 @@ export function WithdrawSheet({
     if (!session) return;
 
     if (session.redeemBalanceMinor >= METTAL_REDEEM_FIRST_MINOR) {
+      setAmountInput(formatMettalMajor(session.redeemBalanceMinor));
       setStep({
         kind: "amount-mettal",
         banks: input.banks,
@@ -794,7 +791,11 @@ export function WithdrawSheet({
   }
 
   async function handleContinueFromBank() {
-    if (step.kind !== "bank" || !step.selectedId) return;
+    if (step.kind !== "bank") return;
+    if (!step.selectedId) {
+      setBankError("Selecciona una cuenta bancaria.");
+      return;
+    }
     const session = sessionRef.current;
     if (!session) return;
     const banks = step.banks;
@@ -1156,23 +1157,30 @@ export function WithdrawSheet({
                   <button
                     key={bank.id}
                     type="button"
-                    onClick={() =>
-                      setStep({ ...step, selectedId: bank.id })
-                    }
+                    onClick={() => {
+                      setBankError(null);
+                      setStep({ ...step, selectedId: bank.id });
+                    }}
                     className={`rounded-2xl border px-4 py-4 text-left transition active:scale-[0.99] ${
                       selected
                         ? "border-accent bg-accent/10"
                         : "border-line bg-surface-raised"
                     }`}
                   >
-                    <BankAccountLines account={bank.bankAccount} />
-                    <span className="mt-1 block text-xs text-ink-muted">
-                      {bank.currency} · {bank.country}
-                    </span>
+                    <BankAccountLines
+                      account={bank.bankAccount}
+                      currency={bank.currency}
+                      country={bank.country}
+                    />
                   </button>
                 );
               })}
             </div>
+            {bankError ? (
+              <p className="mt-3 text-sm text-danger" role="alert">
+                {bankError}
+              </p>
+            ) : null}
             <button
               type="button"
               onClick={() =>
@@ -1205,9 +1213,8 @@ export function WithdrawSheet({
             ) : null}
             <button
               type="button"
-              disabled={!step.selectedId}
               onClick={() => void handleContinueFromBank()}
-              className="mt-8 min-h-14 rounded-2xl bg-accent px-5 py-3 font-semibold text-surface transition active:scale-[0.99] disabled:opacity-50"
+              className="mt-8 min-h-14 rounded-2xl bg-accent px-5 py-3 font-semibold text-surface transition active:scale-[0.99]"
             >
               Continuar
             </button>
@@ -1234,10 +1241,11 @@ export function WithdrawSheet({
                   key={bank.id}
                   className="mt-5 rounded-2xl border border-line bg-surface-raised px-4 py-4"
                 >
-                  <BankAccountLines account={bank.bankAccount} />
-                  <span className="mt-1 block text-xs text-ink-muted">
-                    {bank.currency} · {bank.country}
-                  </span>
+                  <BankAccountLines
+                    account={bank.bankAccount}
+                    currency={bank.currency}
+                    country={bank.country}
+                  />
                 </div>
               ))}
             <button
@@ -1270,23 +1278,23 @@ export function WithdrawSheet({
               Revisa el detalle antes de confirmar el retiro a tu banco.
             </p>
             <div className="mt-5 rounded-2xl border border-line bg-surface-raised px-4 py-4 text-sm text-ink">
-              {peruBankName(step.bankAccount) ? (
-                <div className="flex items-start justify-between gap-3">
-                  <span className="text-ink-muted">Banco</span>
-                  <span className="max-w-[70%] text-right font-semibold">
-                    {peruBankName(step.bankAccount)}
-                  </span>
-                </div>
-              ) : null}
               {step.bankAccount ? (
-                <div
-                  className={`flex items-start justify-between gap-3 ${
-                    peruBankName(step.bankAccount) ? "mt-3" : ""
-                  }`}
-                >
+                <div className="flex items-start justify-between gap-3">
                   <span className="text-ink-muted">Cuenta</span>
                   <span className="max-w-[70%] break-all text-right font-mono font-semibold">
                     {step.bankAccount}
+                  </span>
+                </div>
+              ) : null}
+              {peruBankName(step.bankAccount) ? (
+                <div
+                  className={`flex items-start justify-between gap-3 ${
+                    step.bankAccount ? "mt-3" : ""
+                  }`}
+                >
+                  <span className="text-ink-muted">Banco</span>
+                  <span className="max-w-[70%] text-right font-semibold">
+                    {peruBankName(step.bankAccount)}
                   </span>
                 </div>
               ) : null}
