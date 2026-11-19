@@ -29,6 +29,7 @@ import {
   type MettalCredentials,
 } from "@/lib/mettal/credentials";
 import { clientError, reportClientError } from "@/lib/client-error";
+import { peruBankName } from "@/lib/mettal/peru-banks";
 import { getPenmtBalance } from "@/lib/evm/penmt";
 import {
   getPenmtFeePreview,
@@ -110,6 +111,39 @@ type SheetStep =
   | { kind: "waiting-payout"; transactionId: string; amountMinor: number }
   | { kind: "success"; amountMinor: number }
   | { kind: "error"; message: string };
+
+function BankAccountLines({ account }: { account: string }) {
+  const name = peruBankName(account);
+  return (
+    <>
+      {name ? (
+        <span className="block text-sm font-semibold text-ink">{name}</span>
+      ) : null}
+      <span
+        className={`block font-mono text-base text-ink ${
+          name ? "mt-1 font-medium" : "font-semibold"
+        }`}
+      >
+        {account}
+      </span>
+    </>
+  );
+}
+
+function WithdrawBankHeading({ account }: { account: string }) {
+  const name = peruBankName(account);
+  if (!name && !account) return null;
+  return (
+    <div className="mt-4">
+      {name ? <p className="text-sm font-semibold text-ink">{name}</p> : null}
+      {account ? (
+        <p className={`break-all font-mono text-sm text-ink-muted ${name ? "mt-1" : ""}`}>
+          {account}
+        </p>
+      ) : null}
+    </div>
+  );
+}
 
 function progressMessage(step: SendProgress): string {
   switch (step) {
@@ -1081,6 +1115,11 @@ export function WithdrawSheet({
                 className="mt-2 min-h-14 w-full rounded-2xl border border-line bg-surface-raised px-4 font-mono text-lg text-ink outline-none focus:border-accent"
               />
             </label>
+            {peruBankName(bankInput) ? (
+              <p className="mt-2 text-sm font-semibold text-ink">
+                {peruBankName(bankInput)}
+              </p>
+            ) : null}
             {bankError ? (
               <p className="mt-3 text-sm text-danger" role="alert">
                 {bankError}
@@ -1126,9 +1165,7 @@ export function WithdrawSheet({
                         : "border-line bg-surface-raised"
                     }`}
                   >
-                    <span className="block font-mono text-base font-semibold text-ink">
-                      {bank.bankAccount}
-                    </span>
+                    <BankAccountLines account={bank.bankAccount} />
                     <span className="mt-1 block text-xs text-ink-muted">
                       {bank.currency} · {bank.country}
                     </span>
@@ -1197,9 +1234,7 @@ export function WithdrawSheet({
                   key={bank.id}
                   className="mt-5 rounded-2xl border border-line bg-surface-raised px-4 py-4"
                 >
-                  <span className="block font-mono text-base font-semibold text-ink">
-                    {bank.bankAccount}
-                  </span>
+                  <BankAccountLines account={bank.bankAccount} />
                   <span className="mt-1 block text-xs text-ink-muted">
                     {bank.currency} · {bank.country}
                   </span>
@@ -1235,8 +1270,20 @@ export function WithdrawSheet({
               Revisa el detalle antes de confirmar el retiro a tu banco.
             </p>
             <div className="mt-5 rounded-2xl border border-line bg-surface-raised px-4 py-4 text-sm text-ink">
-              {step.bankAccount ? (
+              {peruBankName(step.bankAccount) ? (
                 <div className="flex items-start justify-between gap-3">
+                  <span className="text-ink-muted">Banco</span>
+                  <span className="max-w-[70%] text-right font-semibold">
+                    {peruBankName(step.bankAccount)}
+                  </span>
+                </div>
+              ) : null}
+              {step.bankAccount ? (
+                <div
+                  className={`flex items-start justify-between gap-3 ${
+                    peruBankName(step.bankAccount) ? "mt-3" : ""
+                  }`}
+                >
                   <span className="text-ink-muted">Cuenta</span>
                   <span className="max-w-[70%] break-all text-right font-mono font-semibold">
                     {step.bankAccount}
@@ -1299,6 +1346,12 @@ export function WithdrawSheet({
               Ya tienes saldo en tu balance de retiro de Mettal.io. Retira desde
               ahí primero.
             </p>
+            <WithdrawBankHeading
+              account={
+                step.banks.find((bank) => bank.id === step.selectedId)
+                  ?.bankAccount ?? ""
+              }
+            />
             <p className="mt-4 text-sm leading-6 text-ink-muted">
               Disponible{" "}
               <span className="ml-1 text-2xl font-semibold tabular-nums tracking-tight text-accent">
@@ -1345,6 +1398,12 @@ export function WithdrawSheet({
 
         {step.kind === "amount" ? (
           <>
+            <WithdrawBankHeading
+              account={
+                step.banks.find((bank) => bank.id === step.selectedId)
+                  ?.bankAccount ?? ""
+              }
+            />
             <p className="mt-4 text-sm leading-6 text-ink-muted">
               Disponible{" "}
               <span className="ml-1 text-2xl font-semibold tabular-nums tracking-tight text-accent">
