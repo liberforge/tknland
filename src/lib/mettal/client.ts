@@ -401,10 +401,18 @@ export type MettalRedeemAddress = {
 export async function listDestinations(options: {
   accessToken: string;
   country?: string;
+  symbol?: string;
 }): Promise<MettalDestination[]> {
-  const qs = options.country
-    ? `?country=${encodeURIComponent(options.country)}`
-    : "";
+  const params = new URLSearchParams();
+  if (options.country) params.set("country", options.country);
+  // PE has multiple rails; Mettal requires symbol when country is set.
+  if (options.country || options.symbol) {
+    params.set(
+      "symbol",
+      (options.symbol ?? METTAL_DEFAULT_SYMBOL).trim().toUpperCase(),
+    );
+  }
+  const qs = params.toString() ? `?${params}` : "";
   const response = await mettalFetch("GET", "/v1/account/destinations", {
     headers: { Authorization: `Bearer ${options.accessToken}` },
     query: qs,
@@ -427,6 +435,7 @@ export async function registerDestination(options: {
   accessToken: string;
   bankAccount: string;
   country?: string;
+  symbol?: string;
 }): Promise<MettalDestination> {
   const response = await mettalFetch("POST", "/v1/account/destinations", {
     headers: {
@@ -437,6 +446,7 @@ export async function registerDestination(options: {
       type: "bank_account",
       bankAccount: options.bankAccount,
       country: options.country ?? METTAL_DEFAULT_COUNTRY,
+      symbol: (options.symbol ?? METTAL_DEFAULT_SYMBOL).trim().toUpperCase(),
     }),
   });
   const body = (await response.json()) as {

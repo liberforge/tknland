@@ -14,6 +14,7 @@ dist-ssr
 .env
 .env.*
 !.env.example
+!.env.example.staging-test
 .dev.vars
 
 # Editor
@@ -31,3 +32,4 @@ dev-dist
 private/*
 .vercel
 .env*
+!.env.example.staging-test

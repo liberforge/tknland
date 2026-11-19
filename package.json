@@ -9,7 +9,10 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:journeys": "node scripts/user-journey-battery.mjs",
+    "test:journeys:mettal": "TKN_ALLOW_SEND=0 TKN_ALLOW_GAS_PACK=0 node scripts/user-journey-battery.mjs",
+    "test:journeys:onchain": "METTAL_STG_ALLOW_SIMULATE_DEPOSIT=0 METTAL_STG_ALLOW_ACQUIRE=0 METTAL_STG_ALLOW_REDEEM=0 node scripts/user-journey-battery.mjs"
   },
   "dependencies": {
     "@scure/bip32": "^2.2.0",
