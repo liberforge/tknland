@@ -6,15 +6,21 @@ const STORAGE_KEY = "tkn.land.devSimulatedAddress";
 type Listener = () => void;
 const listeners = new Set<Listener>();
 
+function configuredAddress(): Address | null {
+  const raw = import.meta.env.VITE_DEV_ADDRESS?.trim() ?? "";
+  if (!isAddress(raw)) return null;
+  return raw;
+}
+
 function readStored(): Address | null {
   if (!import.meta.env.DEV) return null;
   try {
     const raw = sessionStorage.getItem(STORAGE_KEY)?.trim() ?? "";
-    if (!isAddress(raw)) return null;
-    return raw;
+    if (isAddress(raw)) return raw;
   } catch {
-    return null;
+    return configuredAddress();
   }
+  return configuredAddress();
 }
 
 /** DEV-only address used for balance and send previews. Never signs. */

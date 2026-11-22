@@ -1,6 +1,7 @@
 import { clientError } from "@/lib/client-error";
 import { useEffect, useState, type ReactNode } from "react";
 import type { Address } from "viem";
+import { ActivityPanel } from "./ActivityPanel";
 import { BackupFlow } from "./BackupFlow";
 import { HighlightedAddress } from "./DestinationAccount";
 import { getPublicClient } from "@/lib/evm/client";
@@ -19,6 +20,8 @@ import {
 
 type MenuSheetProps = {
   open: boolean;
+  /** View shown when the sheet opens. */
+  initialView?: MenuView;
   onClose: () => void;
   onClearIndexedDb?: () => void;
   clearError?: string | null;
@@ -32,7 +35,7 @@ type MenuSheetProps = {
   canRestoreSeed?: boolean;
 };
 
-type MenuView = "menu" | "about" | "backup" | "network" | "restore" | "simulate";
+type MenuView = "menu" | "about" | "backup" | "network" | "restore" | "simulate" | "activity";
 
 type NetworkStatus =
   | { kind: "idle" }
@@ -48,6 +51,7 @@ type NetworkStatus =
 
 export function MenuSheet({
   open,
+  initialView = "menu",
   onClose,
   onClearIndexedDb,
   clearError,
@@ -82,7 +86,7 @@ export function MenuSheet({
 
     if (open) {
       setMounted(true);
-      setView("menu");
+      setView(initialView);
       setNetwork({ kind: "idle" });
       setResolvedAddress(getPrimaryAddress(vault));
       setCopiedAccount(false);
@@ -103,9 +107,9 @@ export function MenuSheet({
       cancelAnimationFrame(secondFrame);
       clearTimeout(timer);
     };
-    // Only re-run on open/close — vault updates must not reset the sheet.
+    // Only re-run when the sheet opens — vault updates must not reset it.
     // eslint-disable-next-line react-hooks/exhaustive-deps -- vault read only when opening
-  }, [open]);
+  }, [open, initialView]);
 
   useEffect(() => {
     if (!open || view !== "network") return;
@@ -221,7 +225,9 @@ export function MenuSheet({
             ? "Restaurar frase"
             : view === "simulate"
               ? "Simular dirección"
-              : "Menú";
+              : view === "activity"
+                ? "Historial"
+                : "Menú";
 
   const networkStatusMessage =
     network.kind === "unlocking"
@@ -272,6 +278,11 @@ export function MenuSheet({
                   )
                 }
                 onClick={() => void handleRevealAccount()}
+              />
+              <MenuItem
+                label="Historial"
+                hint="Depósitos, retiros y envíos"
+                onClick={() => setView("activity")}
               />
               <MenuItem
                 label="Haz una Copia de Seguridad"
@@ -345,6 +356,25 @@ export function MenuSheet({
             >
               Cerrar
             </button>
+          </>
+        ) : null}
+        {view === "activity" ? (
+          <>
+            <p className="text-xl font-semibold text-ink">Historial</p>
+            <ActivityPanel
+              vault={vault}
+              mockBiometrics={mockBiometrics}
+              onVaultUpdated={onVaultUpdated}
+            />
+            <div className="mt-auto border-t border-line pt-4">
+              <button
+                type="button"
+                onClick={onClose}
+                className="w-full rounded-xl border border-line bg-surface py-3 text-ink transition active:bg-line"
+              >
+                Cerrar
+              </button>
+            </div>
           </>
         ) : null}
         {view === "network" ? (

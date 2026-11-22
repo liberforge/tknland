@@ -1,5 +1,6 @@
 type HomeScreenProps = {
   balanceAmount?: string | null;
+  onHistory: () => void;
   onAdd: () => void;
   onSend: () => void;
   onRequest: () => void;
@@ -8,6 +9,7 @@ type HomeScreenProps = {
 
 export function HomeScreen({
   balanceAmount = null,
+  onHistory,
   onAdd,
   onSend,
   onRequest,
@@ -26,20 +28,25 @@ export function HomeScreen({
         <p className="text-[0.7rem] font-medium tracking-[0.22em] text-accent uppercase">
           Tu saldo
         </p>
-        <p className="mt-4 grid grid-cols-[1fr_auto_1fr] items-baseline tracking-tight tabular-nums">
-          <span
-            className="col-start-2 min-h-[3.75rem] text-6xl font-semibold leading-none tracking-tight text-ink"
-            aria-busy={!balanceReady}
-          >
-            {balanceReady ? balanceAmount : "\u00A0"}
+        <button
+          type="button"
+          onClick={onHistory}
+          aria-label="Historial"
+          aria-busy={!balanceReady}
+          className="mt-4 w-full transition active:scale-[0.98]"
+        >
+          <span className="grid grid-cols-[1fr_auto_1fr] items-baseline tracking-tight tabular-nums">
+            <span className="col-start-2 min-h-[3.75rem] text-6xl font-semibold leading-none tracking-tight text-ink">
+              {balanceReady ? balanceAmount : "\u00A0"}
+            </span>
+            <span className="col-start-3 ml-2.5 self-end pb-1.5 text-xs font-medium tracking-wide text-accent-soft">
+              PENMT
+            </span>
           </span>
-          <span className="col-start-3 ml-2.5 self-end pb-1.5 text-xs font-medium tracking-wide text-accent-soft">
-            PENMT
+          <span className="mt-4 block min-h-5 text-sm text-ink-muted tabular-nums">
+            {balanceReady ? `≈ S/ ${balanceAmount}` : "\u00A0"}
           </span>
-        </p>
-        <p className="mt-4 min-h-5 text-sm text-ink-muted tabular-nums">
-          {balanceReady ? `≈ S/ ${balanceAmount}` : "\u00A0"}
-        </p>
+        </button>
       </div>
 
       <div className="flex flex-col gap-3">

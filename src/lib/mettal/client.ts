@@ -1,3 +1,4 @@
+import type { MettalTransactionPage, PublicMettalTransaction } from "@/lib/activity/types";
 import {
   METTAL_API_URL,
   type MettalCredentials,
@@ -600,6 +601,91 @@ export async function getRedeemStatus(options: {
     throw mettalFailure("GET", path, "Mettal no devolvió el estado del retiro.");
   }
   return body.data;
+}
+
+export async function listAccountTransactions(options: {
+  accessToken: string;
+  page?: number;
+  limit?: number;
+}): Promise<MettalTransactionPage> {
+  const page = Math.max(1, options.page ?? 1);
+  const limit = Math.min(50, Math.max(1, options.limit ?? 20));
+  const path = "/v1/account/transactions";
+  const response = await mettalFetch("GET", path, {
+    headers: { Authorization: `Bearer ${options.accessToken}` },
+    query: `?page=${page}&limit=${limit}`,
+  });
+  const body = (await response.json()) as {
+    success?: boolean;
+    data?: PublicMettalTransaction[];
+    page?: number;
+    pages?: number;
+    total?: number;
+  };
+  if (!body.success || !Array.isArray(body.data)) {
+    throw mettalFailure("GET", path, "Mettal no devolvió el historial.");
+  }
+  return {
+    rows: body.data.map(publicTransaction),
+    page: finiteInt(body.page, page),
+    pages: finiteInt(body.pages, 0),
+    total: finiteInt(body.total, body.data.length),
+  };
+}
+
+function publicTransaction(row: PublicMettalTransaction): PublicMettalTransaction {
+  return {
+    id: text(row.id),
+    type: text(row.type),
+    status: text(row.status),
+    concept: text(row.concept),
+    amount: row.amount
+      ? {
+          value: finiteNumber(row.amount.value),
+          currency: text(row.amount.currency),
+          symbol: text(row.amount.symbol),
+        }
+      : undefined,
+    date: row.date
+      ? { createdAt: text(row.date.createdAt), updatedAt: text(row.date.updatedAt) }
+      : undefined,
+    fee: row.fee
+      ? {
+          total: finiteNumber(row.fee.total),
+          currency: text(row.fee.currency),
+          symbol: text(row.fee.symbol),
+        }
+      : undefined,
+    bank: row.bank
+      ? { account: text(row.bank.account), bankName: text(row.bank.bankName) }
+      : undefined,
+    blockchain: row.blockchain
+      ? {
+          network: text(row.blockchain.network),
+          address: text(row.blockchain.address),
+          transactionHash: text(row.blockchain.transactionHash),
+        }
+      : undefined,
+  };
+}
+
+function text(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function finiteNumber(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return undefined;
+}
+
+function finiteInt(value: unknown, fallback: number): number {
+  const parsed = finiteNumber(value);
+  if (parsed == null) return fallback;
+  return Math.floor(parsed);
 }
 
 export function maskBankAccount(value: string): string {

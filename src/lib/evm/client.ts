@@ -14,11 +14,15 @@ const BASE_MAINNET_RPC_URLS = [
   "https://base-rpc.publicnode.com",
 ] as const;
 
-/** Ordered Base Sepolia RPCs (no ranking — try in order). */
+/**
+ * Ordered Base Sepolia RPCs (no ranking — try in order).
+ * sepolia.base.org rejects eth_getLogs ranges above 200 blocks, so the
+ * nodes that allow a 50,000-block range come first.
+ */
 const BASE_SEPOLIA_RPC_URLS = [
-  "https://sepolia.base.org",
   "https://base-sepolia.publicnode.com",
   "https://base-sepolia-rpc.publicnode.com",
+  "https://sepolia.base.org",
 ] as const;
 
 const RPC_URLS = EVM_USE_MAINNET ? BASE_MAINNET_RPC_URLS : BASE_SEPOLIA_RPC_URLS;

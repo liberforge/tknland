@@ -57,6 +57,7 @@ const mockBiometrics = isMockBiometrics();
 
 export default function App() {
   const [menuOpen, setMenuOpen] = useState(false);
+  const [menuView, setMenuView] = useState<"menu" | "activity">("menu");
   const [mettalOpen, setMettalOpen] = useState(false);
   const [depositOpen, setDepositOpen] = useState(false);
   const [withdrawOpen, setWithdrawOpen] = useState(false);
@@ -376,7 +377,10 @@ export default function App() {
           <button
             type="button"
             aria-label="Abrir menú"
-            onClick={() => setMenuOpen(true)}
+            onClick={() => {
+              setMenuView("menu");
+              setMenuOpen(true);
+            }}
             className="grid h-11 w-11 place-items-center rounded-xl border border-line/80 bg-surface-raised/80 text-ink backdrop-blur-sm transition active:scale-[0.96]"
           >
             <span className="flex w-5 flex-col gap-1.5" aria-hidden>
@@ -416,6 +420,10 @@ export default function App() {
         {boot.status === "ready" && sendMode == null ? (
           <HomeScreen
             balanceAmount={homeBalance}
+            onHistory={() => {
+              setMenuView("activity");
+              setMenuOpen(true);
+            }}
             onAdd={handleAdd}
             onSend={() => setSendMode("send")}
             onRequest={() => setSendMode("request")}
@@ -437,6 +445,7 @@ export default function App() {
       {boot.status === "ready" ? (
         <MenuSheet
           open={menuOpen}
+          initialView={menuView}
           onClose={() => setMenuOpen(false)}
           onClearIndexedDb={
             import.meta.env.DEV ? handleClearIndexedDb : undefined
