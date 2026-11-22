@@ -48,11 +48,12 @@ export function ActivityPanel({
   const [mettalError, setMettalError] = useState<string | null>(null);
   const [chainError, setChainError] = useState<string | null>(null);
   const [hint, setHint] = useState<string | null>(null);
+  const [page, setPage] = useState(0);
   const [range, setRange] = useState(() => {
     const to = Date.now();
     return { from: to - ACTIVITY_WINDOW_MS, to };
   });
-  const loadRef = useRef<(extend: boolean) => Promise<void>>(async () => {});
+  const loadRef = useRef<(nextPage: number) => Promise<void>>(async () => {});
 
   useEffect(() => {
     let cancelled = false;
@@ -60,33 +61,55 @@ export function ActivityPanel({
       vault.mettalConnected === true || Boolean(vault.mettalCredentials);
     const tokenRef = { current: null as string | null };
     const rowsRef = { current: [] as PublicMettalTransaction[] };
-    const transfersRef = { current: [] as PenmtTransfer[] };
     const pageRef = { current: 0 };
     const pagesRef = { current: 0 };
     const redeemRef = { current: [] as string[] };
     const decimalsRef = { current: 6 };
     const headRef = { current: null as ChainHead | null };
-    const reachedRef = { current: null as bigint | null };
-    const reachedMsRef = { current: Date.now() };
+    const windowsRef = { current: [] as ActivityWindow[] };
+    const indexRef = { current: 0 };
     const walletRef = { current: null as Address | null };
     let busy = false;
 
     function publish() {
       if (cancelled || !walletRef.current) return;
+      const window = windowsRef.current[indexRef.current];
+      const records = buildActivity({
+        transactions: rowsRef.current,
+        transfers: mergeTransfers(
+          [],
+          windowsRef.current.flatMap((item) => item.transfers),
+        ),
+        redeemAddresses: redeemRef.current,
+        wallet: walletRef.current,
+        decimals: decimalsRef.current,
+      });
+      if (!window) {
+        setLines(records);
+        return;
+      }
+      const newest = indexRef.current === 0;
       setLines(
-        buildActivity({
-          transactions: rowsRef.current,
-          transfers: transfersRef.current,
-          redeemAddresses: redeemRef.current,
-          wallet: walletRef.current,
-          decimals: decimalsRef.current,
+        records.filter((line) => {
+          if (line.at < window.from) return false;
+          return newest ? line.at <= window.to : line.at < window.to;
         }),
       );
     }
 
-    async function load(extend: boolean) {
-      if (busy) return;
+    async function load(nextPage: number) {
+      if (busy || nextPage < 0) return;
+      const cached = windowsRef.current[nextPage];
+      if (cached) {
+        indexRef.current = nextPage;
+        setPage(nextPage);
+        setRange({ from: cached.from, to: cached.to });
+        publish();
+        return;
+      }
+      if (nextPage !== windowsRef.current.length) return;
       busy = true;
+      const extend = nextPage > 0;
       if (extend) setLoadingMore(true);
       else setLoading(true);
       try {
@@ -187,7 +210,7 @@ export function ActivityPanel({
         }
 
         if (tokenRef.current) {
-          const nextPage = pageRef.current === 0 ? 1 : pageRef.current + 1;
+          const mettalPage = pageRef.current === 0 ? 1 : pageRef.current + 1;
           const hasMore =
             !extend ||
             pageRef.current === 0 ||
@@ -196,7 +219,7 @@ export function ActivityPanel({
             try {
               const page = await listAccountTransactions({
                 accessToken: tokenRef.current,
-                page: nextPage,
+                page: mettalPage,
                 limit: PAGE_SIZE,
               });
               rowsRef.current = extend
@@ -233,17 +256,15 @@ export function ActivityPanel({
         try {
           const head = headRef.current ?? (await chainHead());
           headRef.current = head;
-          const oldest = oldestAt(rowsRef.current);
-          let targetMs = Date.now() - ACTIVITY_WINDOW_MS;
-          if (oldest != null) targetMs = Math.min(targetMs, oldest);
-          if (extend) {
-            targetMs = Math.min(targetMs, reachedMsRef.current - ACTIVITY_WINDOW_MS);
-          }
-          const lowBlock = blockForTimestamp(head, targetMs);
-          const highBlock =
-            extend && reachedRef.current != null
-              ? reachedRef.current - 1n
-              : head.block;
+          const previous = extend ? windowsRef.current[nextPage - 1] : null;
+          const anchor = previous ? previous.from : head.timestampMs;
+          const intended = { from: anchor - ACTIVITY_WINDOW_MS, to: anchor };
+          if (!cancelled) setRange(intended);
+          const lowBlock = blockForTimestamp(head, intended.from);
+          const highBlock = previous ? previous.reachedBlock - 1n : head.block;
+          let transfers: PenmtTransfer[] = [];
+          let reachedBlock = highBlock;
+          let from = intended.from;
           if (highBlock >= lowBlock) {
             const scanned = await scanPenmtTransfers({
               wallet: address,
@@ -251,23 +272,19 @@ export function ActivityPanel({
               lowBlock,
               head,
             });
-            transfersRef.current = mergeTransfers(
-              transfersRef.current,
-              scanned.transfers,
-            );
-            reachedRef.current = scanned.reachedBlock;
-            reachedMsRef.current =
-              scanned.reachedBlock > lowBlock
-                ? approximateTimestamp(head, scanned.reachedBlock)
-                : targetMs;
+            transfers = scanned.transfers;
+            reachedBlock = scanned.reachedBlock;
+            if (scanned.reachedBlock > lowBlock) {
+              from = approximateTimestamp(head, scanned.reachedBlock);
+            }
           }
+          const window = { from, to: intended.to, transfers, reachedBlock };
+          windowsRef.current[nextPage] = window;
+          indexRef.current = nextPage;
           if (!cancelled) {
             setChainError(null);
-            const reachedMs = reachedMsRef.current;
-            setRange((current) => ({
-              from: extend ? Math.min(current.from, reachedMs) : reachedMs,
-              to: extend ? current.to : head.timestampMs,
-            }));
+            setPage(nextPage);
+            setRange({ from: window.from, to: window.to });
           }
         } catch (err) {
           if (!cancelled) {
@@ -277,6 +294,8 @@ export function ActivityPanel({
                 err instanceof Error ? err : "No se pudo leer la cadena.",
               ),
             );
+            const current = windowsRef.current[indexRef.current];
+            if (current) setRange({ from: current.from, to: current.to });
           }
         }
 
@@ -291,7 +310,7 @@ export function ActivityPanel({
     }
 
     loadRef.current = load;
-    void load(false);
+    void load(0);
     return () => {
       cancelled = true;
     };
@@ -303,15 +322,26 @@ export function ActivityPanel({
     <div className="mt-4 flex flex-1 flex-col">
       <div className="flex items-center justify-between gap-3 border-b border-line pb-3">
         <p className="text-sm text-ink-muted">{formatSpan(range.from, range.to)}</p>
-        <button
-          type="button"
-          onClick={() => void loadRef.current(true)}
-          className="shrink-0 rounded-lg border border-line bg-surface px-3 py-1.5 text-sm text-ink transition active:bg-line"
-        >
-          {loadingMore ? "Cargando…" : "Cargar más"}
-        </button>
+        <div className="flex shrink-0 gap-2">
+          {page > 0 ? (
+            <button
+              type="button"
+              onClick={() => void loadRef.current(page - 1)}
+              className="rounded-lg border border-line bg-surface px-3 py-1.5 text-sm text-ink transition active:bg-line"
+            >
+              Anterior
+            </button>
+          ) : null}
+          <button
+            type="button"
+            onClick={() => void loadRef.current(page + 1)}
+            className="rounded-lg border border-line bg-surface px-3 py-1.5 text-sm text-ink transition active:bg-line"
+          >
+            Siguiente
+          </button>
+        </div>
       </div>
-      {loading ? (
+      {loading || loadingMore ? (
         <div
           className="flex flex-1 flex-col items-center justify-center py-16"
           role="status"
@@ -323,13 +353,13 @@ export function ActivityPanel({
           />
         </div>
       ) : null}
-      {!loading && hint ? (
+      {!loading && !loadingMore && hint ? (
         <p className="mt-3 text-sm text-ink-muted">{hint}</p>
       ) : null}
-      {!loading && lines.length === 0 && !hint ? (
+      {!loading && !loadingMore && lines.length === 0 && !hint ? (
         <p className="mt-3 text-sm text-ink-muted">Todavía no hay movimientos.</p>
       ) : null}
-      {!loading && lines.length > 0 ? (
+      {!loading && !loadingMore && lines.length > 0 ? (
         <ul className="mt-2 divide-y divide-line">
           {lines.map((line) => (
             <li key={line.id} className="py-4">
@@ -370,19 +400,15 @@ export function ActivityPanel({
   );
 }
 
+type ActivityWindow = {
+  from: number;
+  to: number;
+  transfers: PenmtTransfer[];
+  reachedBlock: bigint;
+};
+
 function isZeroAddress(address: string): boolean {
   return /^0x0+$/i.test(address);
-}
-
-function oldestAt(rows: PublicMettalTransaction[]): number | null {
-  let oldest: number | null = null;
-  for (const row of rows) {
-    const raw = row.date?.createdAt ?? row.date?.updatedAt;
-    const parsed = raw ? Date.parse(raw) : Number.NaN;
-    if (!Number.isFinite(parsed)) continue;
-    if (oldest == null || parsed < oldest) oldest = parsed;
-  }
-  return oldest;
 }
 
 function mergeTransfers(current: PenmtTransfer[], next: PenmtTransfer[]): PenmtTransfer[] {
