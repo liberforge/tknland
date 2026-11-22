@@ -1,6 +1,26 @@
 import { clientError } from "@/lib/client-error";
 import { useEffect, useRef, useState } from "react";
 
+function BackupTitle({ children }: { children: string }) {
+  return (
+    <div className="flex items-center gap-2.5">
+      <svg className="h-8 w-8 shrink-0 text-accent-soft" viewBox="0 0 32 32" fill="none" aria-hidden>
+        <path
+          fill="currentColor"
+          fillRule="evenodd"
+          d="M11.2 15.4V10.8a4.8 4.8 0 0 1 9.6 0v4.6h-3V10.8a1.8 1.8 0 0 0-3.6 0v4.6h-3z"
+        />
+        <path
+          fill="currentColor"
+          fillRule="evenodd"
+          d="M10.2 14h11.6a2 2 0 0 1 2 2v8.2a2 2 0 0 1-2 2H10.2a2 2 0 0 1-2-2V16a2 2 0 0 1 2-2zm5.8 4.2a1.35 1.35 0 0 1 .62 2.5l.48 2.5h-2.2l.48-2.5a1.35 1.35 0 0 1 .62-2.5z"
+        />
+      </svg>
+      <p className="text-xl font-semibold text-ink">{children}</p>
+    </div>
+  );
+}
+
 type QuizQuestion = {
   id: string;
   prompt: string;
@@ -42,7 +62,7 @@ const QUESTIONS: QuizQuestion[] = [
       },
       {
         id: "already-have",
-        label: "Ellos ya tienen todas las clave",
+        label: "Ellos ya tienen todas las claves",
         correct: false,
       },
       {
@@ -138,7 +158,7 @@ export function BackupFlow({
   onBack,
 }: BackupFlowProps) {
   const [step, setStep] = useState<BackupStep>({ kind: "quiz", index: 0 });
-  const [optionOrders] = useState(() =>
+  const [optionOrders, setOptionOrders] = useState(() =>
     QUESTIONS.map((question) => shuffleOptions(question.options)),
   );
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -156,6 +176,32 @@ export function BackupFlow({
   const passingFrom = useRef<number | null>(null);
 
   function resetQuizAnswer() {
+    if (step.kind === "quiz") {
+      const index = step.index;
+      const question = QUESTIONS[index];
+      if (question && question.options.length > 1) {
+        setOptionOrders((current) => {
+          const previousIds = (current[index] ?? question.options)
+            .map((option) => option.id)
+            .join("\0");
+          let next = shuffleOptions(question.options);
+          for (
+            let attempt = 0;
+            attempt < 8 &&
+            next.map((option) => option.id).join("\0") === previousIds;
+            attempt += 1
+          ) {
+            next = shuffleOptions(question.options);
+          }
+          if (next.map((option) => option.id).join("\0") === previousIds) {
+            next = [...next.slice(1), next[0]!];
+          }
+          return current.map((order, orderIndex) =>
+            orderIndex === index ? next : order,
+          );
+        });
+      }
+    }
     setSelectedId(null);
     setRevealed(false);
     setWrongHint(null);
@@ -249,10 +295,13 @@ export function BackupFlow({
 
   if (step.kind === "quiz") {
     const question = QUESTIONS[step.index]!;
-    const options = optionOrders[step.index] ?? question.options;
+    const options = (optionOrders[step.index] ?? question.options).map(
+      (option) =>
+        question.options.find((item) => item.id === option.id) ?? option,
+    );
     return (
       <>
-        <p className="text-xl font-semibold text-ink">Copia de seguridad</p>
+        <BackupTitle>Copia de seguridad</BackupTitle>
         <div
           className="mt-4 flex gap-1.5"
           aria-hidden
@@ -403,7 +452,7 @@ export function BackupFlow({
   if (step.kind === "privacy") {
     return (
       <>
-        <p className="text-xl font-semibold text-ink">Copia de seguridad</p>
+        <BackupTitle>Copia de seguridad</BackupTitle>
         <div className="mt-6 space-y-4 text-sm leading-6 text-ink-muted">
           <p className="text-base font-medium text-ink">
             Asegúrate de que nadie esté mirando tu pantalla.
@@ -447,7 +496,7 @@ export function BackupFlow({
 
   return (
     <>
-      <p className="text-xl font-semibold text-ink">Tu frase secreta</p>
+      <BackupTitle>Tu frase secreta</BackupTitle>
       <div className="mt-4 space-y-4 pb-6 text-sm leading-6 text-ink-muted">
         <p>
           La frase secreta son doce palabras que proveen acceso{" "}

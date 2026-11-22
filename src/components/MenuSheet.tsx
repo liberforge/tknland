@@ -262,6 +262,7 @@ export function MenuSheet({
             <p className="text-xl font-semibold text-ink">Menú</p>
             <ul className="mt-4 divide-y divide-line">
               <MenuItem
+                icon="account"
                 label="Tu cuenta TKN"
                 hint={
                   displayAddress ? (
@@ -280,11 +281,13 @@ export function MenuSheet({
                 onClick={() => void handleRevealAccount()}
               />
               <MenuItem
+                icon="clock"
                 label="Historial"
                 hint="Depósitos, retiros y envíos"
                 onClick={() => setView("activity")}
               />
               <MenuItem
+                icon="safe"
                 label="Haz una Copia de Seguridad"
                 hint={
                   backupCompleted
@@ -295,6 +298,7 @@ export function MenuSheet({
               />
               {canRestoreSeed ? (
                 <MenuItem
+                  icon="safe"
                   label="Restaurar desde una Copia de Seguridad"
                   hint="Reemplaza esta billetera vacía"
                   onClick={() => {
@@ -304,11 +308,13 @@ export function MenuSheet({
                 />
               ) : null}
               <MenuItem
+                icon="gas"
                 label="Recarga de Red"
                 hint="Saldo de red y envíos"
                 onClick={() => setView("network")}
               />
               <MenuItem
+                icon="info"
                 label="Acerca de"
                 hint="Billetera tkn.land"
                 onClick={() => setView("about")}
@@ -360,7 +366,10 @@ export function MenuSheet({
         ) : null}
         {view === "activity" ? (
           <>
-            <p className="text-xl font-semibold text-ink">Historial</p>
+            <div className="flex items-center gap-2.5">
+              <MenuGlyph kind="clock" className="h-8 w-8 shrink-0 text-accent-soft" />
+              <p className="text-xl font-semibold text-ink">Historial</p>
+            </div>
             <ActivityPanel
               vault={vault}
               mockBiometrics={mockBiometrics}
@@ -379,7 +388,10 @@ export function MenuSheet({
         ) : null}
         {view === "network" ? (
           <>
-            <p className="text-xl font-semibold text-ink">Recarga de Red</p>
+            <div className="flex items-center gap-2.5">
+              <MenuGlyph kind="gas" className="h-8 w-8 shrink-0 text-accent-soft" />
+              <p className="text-xl font-semibold text-ink">Recarga de Red</p>
+            </div>
             <div className="mt-6 space-y-6 pb-10">
               {networkStatusMessage ? (
                 <p className="text-sm text-ink-muted">{networkStatusMessage}</p>
@@ -426,7 +438,10 @@ export function MenuSheet({
         ) : null}
         {view === "about" ? (
           <>
-            <p className="text-xl font-semibold text-ink">Acerca de</p>
+            <div className="flex items-center gap-2.5">
+              <MenuGlyph kind="info" className="h-8 w-8 shrink-0 text-accent-soft" />
+              <p className="text-xl font-semibold text-ink">Acerca de</p>
+            </div>
             <div className="mt-4 space-y-4 text-sm leading-6 text-ink-muted">
               <p>
                 tkn.land es una billetera de{" "}
@@ -552,13 +567,16 @@ export function MenuSheet({
         ) : null}
         {view === "restore" ? (
           <>
-            <p className="text-xl font-semibold text-ink">
-              Restaurar desde una frase secreta
-            </p>
+            <div className="flex items-center gap-2.5">
+              <MenuGlyph kind="safe" className="h-8 w-8 shrink-0 text-accent-soft" />
+              <p className="text-xl font-semibold text-ink">
+                Restaurar desde una frase secreta
+              </p>
+            </div>
             <div className="mt-4 space-y-4 text-sm leading-6 text-ink-muted">
               <p>
-                Escribe las 12 o 24 palabras que guardaste, en orden y separadas
-                por espacios. Esta billetera vacía pasará a usar esa frase.
+                Escribe las 12 palabras que guardaste, en orden y separadas por
+                espacios. Esta billetera vacía pasará a usar esa frase.
               </p>
               <textarea
                 value={restorePhrase}
@@ -614,34 +632,127 @@ function formatBuiltAt(iso: string): string {
 }
 
 function MenuItem({
+  icon,
   label,
   hint,
   onClick,
 }: {
+  icon?: MenuIcon;
   label: string;
   hint: ReactNode;
   onClick?: () => void;
 }) {
   const content = (
     <>
-      <p className="text-ink">{label}</p>
-      <div className="text-sm text-ink-muted">{hint}</div>
+      {icon ? <MenuGlyph kind={icon} /> : null}
+      <span className="min-w-0">
+        <p className="text-ink">{label}</p>
+        <div className="text-sm text-ink-muted">{hint}</div>
+      </span>
     </>
   );
+  const className = icon
+    ? "flex w-full items-start gap-3 py-4 text-left"
+    : "flex w-full flex-col items-start py-4 text-left";
 
   return (
     <li>
       {onClick ? (
-        <button
-          type="button"
-          onClick={onClick}
-          className="flex w-full flex-col items-start py-4 text-left"
-        >
+        <button type="button" onClick={onClick} className={className}>
           {content}
         </button>
       ) : (
-        <div className="py-4">{content}</div>
+        <div className={className}>{content}</div>
       )}
     </li>
+  );
+}
+
+type MenuIcon = "account" | "clock" | "safe" | "gas" | "info";
+
+function MenuGlyph({ kind, className }: { kind: MenuIcon; className?: string }) {
+  const common = className ?? "mt-0.5 h-6 w-6 shrink-0 text-accent-soft";
+  if (kind === "account") {
+    return (
+      <svg className={common} viewBox="0 0 32 32" fill="none" aria-hidden>
+        <circle cx="16" cy="11" r="4" stroke="currentColor" strokeWidth="2.25" />
+        <path
+          d="M8.5 24.5c1.1-3.8 3.8-5.5 7.5-5.5s6.4 1.7 7.5 5.5"
+          stroke="currentColor"
+          strokeWidth="2.25"
+          strokeLinecap="round"
+        />
+      </svg>
+    );
+  }
+  if (kind === "clock") {
+    return (
+      <svg className={common} viewBox="0 0 32 32" fill="none" aria-hidden>
+        <circle cx="16" cy="16" r="8" stroke="currentColor" strokeWidth="2.25" />
+        <path
+          d="M16 11.5V16l3 2"
+          stroke="currentColor"
+          strokeWidth="2.25"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+    );
+  }
+  if (kind === "safe") {
+    return (
+      <svg className={common} viewBox="0 0 32 32" fill="none" aria-hidden>
+        <path
+          fill="currentColor"
+          fillRule="evenodd"
+          d="M11.2 15.4V10.8a4.8 4.8 0 0 1 9.6 0v4.6h-3V10.8a1.8 1.8 0 0 0-3.6 0v4.6h-3z"
+        />
+        <path
+          fill="currentColor"
+          fillRule="evenodd"
+          d="M10.2 14h11.6a2 2 0 0 1 2 2v8.2a2 2 0 0 1-2 2H10.2a2 2 0 0 1-2-2V16a2 2 0 0 1 2-2zm5.8 4.2a1.35 1.35 0 0 1 .62 2.5l.48 2.5h-2.2l.48-2.5a1.35 1.35 0 0 1 .62-2.5z"
+        />
+      </svg>
+    );
+  }
+  if (kind === "gas") {
+    return (
+      <svg className={common} viewBox="0 0 32 32" fill="none" aria-hidden>
+        <rect
+          x="7"
+          y="8"
+          width="11"
+          height="16"
+          rx="1.5"
+          stroke="currentColor"
+          strokeWidth="2.25"
+        />
+        <path
+          d="M10.5 12h4"
+          stroke="currentColor"
+          strokeWidth="2.25"
+          strokeLinecap="round"
+        />
+        <path
+          d="M18 13h3.2a2 2 0 0 1 2 2V22a2 2 0 0 0 2 2H26"
+          stroke="currentColor"
+          strokeWidth="2.25"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+    );
+  }
+  return (
+    <svg className={common} viewBox="0 0 32 32" fill="none" aria-hidden>
+      <circle cx="16" cy="16" r="8" stroke="currentColor" strokeWidth="2.25" />
+      <path
+        d="M16 14.5V21"
+        stroke="currentColor"
+        strokeWidth="2.25"
+        strokeLinecap="round"
+      />
+      <circle cx="16" cy="11.25" r="1.15" fill="currentColor" />
+    </svg>
   );
 }
