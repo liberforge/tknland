@@ -74,6 +74,7 @@
   },
   "rewrites": [
     { "source": "/api/client-error", "destination": "/api/vault?report=client-error" },
+    { "source": "/api/penmt-transfers", "destination": "/api/vault?report=penmt-transfers" },
     { "source": "/(.*)", "destination": "/index.html" }
   ]
 }

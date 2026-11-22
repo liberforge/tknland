@@ -62,6 +62,9 @@ function vaultApiDev(): Plugin {
   const handlerPath = fileURLToPath(
     new URL("./server/vault-handler.ts", import.meta.url),
   );
+  const transfersPath = fileURLToPath(
+    new URL("./server/penmt-transfers.ts", import.meta.url),
+  );
 
   const readBody = (req: Connect.IncomingMessage): Promise<string> =>
     new Promise((resolve, reject) => {
@@ -105,6 +108,37 @@ function vaultApiDev(): Plugin {
             console.error(err);
             res.statusCode = 500;
             res.end();
+          }
+        })();
+        return;
+      }
+      if (path === "/api/penmt-transfers") {
+        void (async () => {
+          try {
+            const mod = (await server.ssrLoadModule(transfersPath)) as typeof import(
+              "./server/penmt-transfers.ts"
+            );
+            let body: unknown = null;
+            if (req.method === "POST") {
+              const raw = await readBody(req);
+              if (raw) {
+                try {
+                  body = JSON.parse(raw) as unknown;
+                } catch {
+                  body = null;
+                }
+              }
+            }
+            const result = await mod.handlePenmtTransfers(body);
+            res.statusCode = result.status;
+            res.setHeader("content-type", "application/json; charset=utf-8");
+            res.setHeader("cache-control", "no-store");
+            res.end(JSON.stringify(result.body));
+          } catch (err) {
+            console.error(err);
+            res.statusCode = 500;
+            res.setHeader("content-type", "application/json; charset=utf-8");
+            res.end(JSON.stringify({ error: "No se pudo leer el índice de movimientos." }));
           }
         })();
         return;
@@ -188,6 +222,8 @@ export default defineConfig(({ mode }) => {
     "KV_REST_API_URL",
     "KV_REST_API_TOKEN",
     "KV_REST_API_READ_ONLY_TOKEN",
+    "ALCHEMY_BASE_MAINNET_URL",
+    "ALCHEMY_BASE_SEPOLIA_URL",
   ]) {
     if (env[key] && !process.env[key]) process.env[key] = env[key];
   }

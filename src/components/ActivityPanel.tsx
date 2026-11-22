@@ -10,6 +10,7 @@ import {
   type ChainHead,
   type PenmtTransfer,
 } from "@/lib/activity/chain";
+import { fetchIndexedPenmtTransfers } from "@/lib/activity/indexed";
 import { buildActivity } from "@/lib/activity/records";
 import type { ActivityRecord, PublicMettalTransaction } from "@/lib/activity/types";
 import { clientError, reportClientError } from "@/lib/client-error";
@@ -266,16 +267,31 @@ export function ActivityPanel({
           let reachedBlock = highBlock;
           let from = intended.from;
           if (highBlock >= lowBlock) {
-            const scanned = await scanPenmtTransfers({
-              wallet: address,
-              highBlock,
-              lowBlock,
-              head,
-            });
-            transfers = scanned.transfers;
-            reachedBlock = scanned.reachedBlock;
-            if (scanned.reachedBlock > lowBlock) {
-              from = approximateTimestamp(head, scanned.reachedBlock);
+            let indexed: PenmtTransfer[] | null = null;
+            try {
+              indexed = await fetchIndexedPenmtTransfers({
+                wallet: address,
+                fromBlock: lowBlock,
+                toBlock: highBlock,
+              });
+            } catch (err) {
+              reportClientError("activity.alchemy", err);
+            }
+            if (indexed) {
+              transfers = indexed;
+              reachedBlock = lowBlock;
+            } else {
+              const scanned = await scanPenmtTransfers({
+                wallet: address,
+                highBlock,
+                lowBlock,
+                head,
+              });
+              transfers = scanned.transfers;
+              reachedBlock = scanned.reachedBlock;
+              if (scanned.reachedBlock > lowBlock) {
+                from = approximateTimestamp(head, scanned.reachedBlock);
+              }
             }
           }
           const window = { from, to: intended.to, transfers, reachedBlock };

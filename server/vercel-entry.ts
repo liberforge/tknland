@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { acceptClientError, logClientError } from "./client-error.ts";
+import { handlePenmtTransfers } from "./penmt-transfers.ts";
 import { handleVault } from "./vault-handler.ts";
 
 function header(req: IncomingMessage, name: string): string | null {
@@ -100,6 +101,19 @@ export default async function handler(
       }
       logClientError(accepted.record);
       sendJson(res, 200, { ok: true }, cors);
+      return;
+    }
+
+    const transfers =
+      url.pathname === "/api/penmt-transfers" ||
+      url.searchParams.get("report") === "penmt-transfers";
+    if (transfers) {
+      if (req.method !== "POST") {
+        sendJson(res, 405, { error: "Método no permitido." }, cors);
+        return;
+      }
+      const result = await handlePenmtTransfers(body);
+      sendJson(res, result.status, result.body, cors);
       return;
     }
 
